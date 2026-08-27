@@ -1,0 +1,18 @@
+{
+  "name": "fluxiars-obsidian",
+  "version": "0.1.0",
+  "description": "fluxiaRSS 每日智读（Obsidian）：拉取 digest、写每日笔记、五档打分回传",
+  "main": "main.js",
+  "scripts": {
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "^0.21.0",
+    "obsidian": "latest",
+    "tslib": "^2.6.3",
+    "typescript": "^5.4.5"
+  }
+}

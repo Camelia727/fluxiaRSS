@@ -1,0 +1,75 @@
+.fluxiars-digest {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.fluxiars-header {
+  font-size: 0.85em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding-bottom: 6px;
+}
+
+.fluxiars-card {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.fluxiars-card-top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.fluxiars-rank {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-radius: 4px;
+  font-size: 0.75em;
+  padding: 1px 6px;
+  flex-shrink: 0;
+}
+
+.fluxiars-title {
+  font-weight: 600;
+}
+
+.fluxiars-reason {
+  font-size: 0.8em;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.fluxiars-summary {
+  margin: 4px 0;
+  font-size: 0.92em;
+  white-space: pre-wrap;
+  color: var(--text-normal);
+}
+
+.fluxiars-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.fluxiars-btn {
+  font-size: 0.8em;
+  padding: 2px 10px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.fluxiars-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.fluxiars-rated {
+  color: var(--color-green);
+  font-size: 0.8em;
+}
