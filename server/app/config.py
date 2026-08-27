@@ -41,6 +41,10 @@ PER_FEED_CAP = int(os.getenv("PER_FEED_CAP", "20"))
 # 概述并发数（凌晨定时任务，8 并发足够）
 SUMMARY_WORKERS = int(os.getenv("SUMMARY_WORKERS", "8"))
 
+# 定时采集（cron，本地时间，每天自动跑一次 run_pipeline）
+COLLECT_HOUR = int(os.getenv("COLLECT_HOUR", "3"))
+COLLECT_MINUTE = int(os.getenv("COLLECT_MINUTE", "17"))
+
 # DeepSeek（OpenAI 兼容）
 DEEPSEEK_BASE = os.getenv("DEEPSEEK_BASE", "https://api.deepseek.com/v1")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")

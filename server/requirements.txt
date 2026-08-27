@@ -3,6 +3,7 @@ uvicorn[standard]
 pydantic
 feedparser
 httpx
+apscheduler
 
 python-dotenv
 

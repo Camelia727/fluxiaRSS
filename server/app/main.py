@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from contextlib import asynccontextmanager
 from datetime import date
 
 from fastapi import FastAPI, HTTPException
@@ -11,6 +12,7 @@ from .db import add_rating, get_article, init_db, list_articles
 from .pipeline import run_pipeline
 from .ranking import rank_articles
 from . import honcho_client
+from . import scheduler
 from .schemas import (
     Conclusion,
     Digest,
@@ -21,15 +23,29 @@ from .schemas import (
     SourceInfo,
 )
 
-app = FastAPI(title="fluxiaRSS API", version="0.2.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """启动时挂上每日定时采集（每天凌晨 COLLECT_HOUR:COLLECT_MINUTE）。"""
+    scheduler.start_scheduler()
+    yield
+    scheduler.shutdown_scheduler()
+
+
+app = FastAPI(title="fluxiaRSS API", version="0.2.0", lifespan=lifespan)
 
 # 排序候选池大小（先取最近 N 条再排序取 Top）
 RANK_POOL = 100
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict:
+    """探活；已跑过定时采集时附上上次 at/result。"""
+    h: dict = {"status": "ok"}
+    lc = scheduler.last_collection()
+    if lc:
+        h["last_collected_at"] = lc["at"]
+        h["last_collect_result"] = lc["result"]
+    return h
 
 
 @app.post("/api/v1/collect")
