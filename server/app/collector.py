@@ -1,7 +1,8 @@
-"""fluxiaRSS 采集器：抓取 RSS → 去重 → 关键词相关过滤 → 概述。"""
+"""fluxiaRSS 采集器：抓取 RSS → 去重 → 关键词相关过滤 → 并发概述。"""
 from __future__ import annotations
 
 import hashlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import feedparser
 import httpx
@@ -20,9 +21,9 @@ def _relevant(title: str, desc: str) -> bool:
     return any(kw in text for kw in config.KEYWORDS)
 
 
-def collect_all() -> list[dict]:
-    """返回本轮新增文章（尚未入库）。单源超上限的截断。"""
-    new: list[dict] = []
+def collect_candidates() -> list[dict]:
+    """采集并过滤相关文章（尚未概述、尚未入库）。"""
+    cands: list[dict] = []
     with httpx.Client(follow_redirects=True, timeout=20) as client:
         for feed in config.FEEDS:
             got = 0
@@ -46,16 +47,35 @@ def collect_all() -> list[dict]:
                     aid = _hash(link)
                     if get_article(aid):
                         continue
-                    new.append(
+                    cands.append(
                         {
                             "id": aid,
                             "url": link,
                             "title": title,
                             "source": feed["name"],
-                            "summary": summarize(title, desc),
+                            "desc": desc,
                         }
                     )
                     got += 1
             except Exception as exc:  # noqa: BLE001
                 print(f"[collector] feed {feed['name']} failed: {exc}")
-    return new
+    return cands
+
+
+def _summarize_parallel(cands: list[dict], workers: int) -> list[dict]:
+    def work(item: dict) -> dict:
+        item["summary"] = summarize(item["title"], item["desc"])
+        return item
+
+    done: list[dict] = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(work, c) for c in cands]
+        for fut in as_completed(futures):
+            done.append(fut.result())
+    return done
+
+
+def collect_all(workers: int | None = None) -> list[dict]:
+    """返回本轮新增文章（含概述）。并发调 DeepSeek。"""
+    workers = workers or config.SUMMARY_WORKERS
+    return _summarize_parallel(collect_candidates(), workers)

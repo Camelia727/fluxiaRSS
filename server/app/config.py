@@ -5,11 +5,12 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-# 自动加载 server 目录下的 .env（含密钥，不入库）
-load_dotenv()
+# 显式加载 server 目录下的 .env（含密钥，不入库）；override=True 让 .env 成为权威
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 
 APP_NAME = os.getenv("FLUXIARSS_APP_NAME", "fluxiaRSS")
 API_PREFIX = "/api/v1"
@@ -37,8 +38,13 @@ FEEDS = [
 # 采集限制：单源单轮最多新增条数（防 arXiv 等大源刷库）
 PER_FEED_CAP = int(os.getenv("PER_FEED_CAP", "20"))
 
+# 概述并发数（凌晨定时任务，8 并发足够）
+SUMMARY_WORKERS = int(os.getenv("SUMMARY_WORKERS", "8"))
+
 # DeepSeek（OpenAI 兼容）
 DEEPSEEK_BASE = os.getenv("DEEPSEEK_BASE", "https://api.deepseek.com/v1")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 DEEPSEEK_TIMEOUT = int(os.getenv("DEEPSEEK_TIMEOUT", "40"))
+
+
 
