@@ -1,6 +1,7 @@
 """fluxiaRSS SQLite 数据层。"""
 from __future__ import annotations
 
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -110,3 +111,70 @@ def source_trust() -> dict[str, float]:
             """
         ).fetchall()
     return {r["src"]: float(r["s"]) for r in rows if r["n"]}
+
+
+def source_stats() -> dict[str, tuple[float, int]]:
+    """每个来源的 (平均分, 评分条数)，供采集期来源门控用。"""
+    with _conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT a.source AS src, AVG(r.score) AS s, COUNT(*) AS n
+            FROM ratings r JOIN articles a ON a.id = r.article_id
+            WHERE r.score IS NOT NULL
+            GROUP BY a.source
+            """
+        ).fetchall()
+    return {r["src"]: (float(r["s"]), r["n"]) for r in rows if r["n"]}
+
+
+# 偏好词提取的英文停用词（标题里出现也说明不了偏好）
+_STOPWORDS = frozenset(
+    """
+    the a an of to in on for with and or not is are was were this that
+    these those it its be been by from at as into over up out new more
+    your you we they he she will can has have how why what when where
+    report analysis look takes next things making going could would make
+    """.split()
+)
+
+
+def preference_tokens(min_pos: int = 7, max_neg: int = 3) -> tuple[set[str], set[str]]:
+    """从已评分文章标题提取正/反偏好词（采集筛选的内容信号）。
+
+    高分(>=min_pos)标题的词 → 正偏好；低分(<=max_neg)标题的词 → 反偏好。
+    同时在高低分都出现的词相互抵消（如 "agent" 这种中性词），避免两边误命中。
+    无评分时返回两个空集（冷启动不做内容筛选）。
+    """
+    with _conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT a.title AS t, r.score AS s
+            FROM ratings r JOIN articles a ON a.id = r.article_id
+            WHERE r.score IS NOT NULL
+            """
+        ).fetchall()
+    pos: set[str] = set()
+    neg: set[str] = set()
+    for r in rows:
+        toks = {
+            w
+            for w in re.split(r"[^a-z0-9]+", (r["t"] or "").lower())
+            if len(w) > 2 and w not in _STOPWORDS
+        }
+        if r["s"] >= min_pos:
+            pos |= toks
+        elif r["s"] <= max_neg:
+            neg |= toks
+    # 基础关键词（如 "agent"）在采集里必然出现，从正/反偏好中剔除，
+    # 否则低分文章标题里的关键词会让几乎所有候选命中反偏好而被误删。
+    kw_tokens = {
+        w
+        for kw in config.KEYWORDS
+        for w in re.split(r"[^a-z0-9]+", kw.lower())
+        if len(w) > 2
+    }
+    pos -= kw_tokens
+    neg -= kw_tokens
+    pos -= neg
+    neg -= pos
+    return pos, neg

@@ -37,6 +37,15 @@ FEEDS = [
 
 # 采集限制：单源单轮最多新增条数（防 arXiv 等大源刷库）
 PER_FEED_CAP = int(os.getenv("PER_FEED_CAP", "20"))
+# 采集扫描上限：单源单轮最多评估的 entry 数（需大于 PER_FEED_CAP 才能做偏好挑选）
+PER_FEED_SCAN_CAP = int(os.getenv("PER_FEED_SCAN_CAP", "100"))
+
+# 评分参与采集筛选（混合力度）：
+# - 来源门控：均分 < SOURCE_MIN_TRUST 且评分 >= SOURCE_MIN_RATINGS 条的源，整轮跳过
+# - 内容偏好：正偏好词（高分标题）命中加权；反偏好词（低分标题）命中且无正偏好则硬删
+# - 探索保底：每源名额中保 EXPLORATION_BUDGET 比例给非偏好文章（防越筛越窄）
+SOURCE_MIN_TRUST = float(os.getenv("SOURCE_MIN_TRUST", "4.0"))
+SOURCE_MIN_RATINGS = int(os.getenv("SOURCE_MIN_RATINGS", "3"))
 
 # 概述并发数（凌晨定时任务，8 并发足够）
 SUMMARY_WORKERS = int(os.getenv("SUMMARY_WORKERS", "8"))
