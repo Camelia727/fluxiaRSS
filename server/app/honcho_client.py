@@ -5,7 +5,7 @@ REST 端点（v3）：
   POST /v3/workspaces/{ws}/peers            get-or-create peer
   POST /v3/workspaces/{ws}/sessions         get-or-create session
   POST /v3/workspaces/{ws}/sessions/{s}/messages   添加消息
-  GET  /v3/workspaces/{ws}/peers/{p}/card   查询画像
+  POST /v3/workspaces/{ws}/peers/{p}/representation   查询画像（OpenAPI 为 POST）
 
 全部 best-effort：Honcho 不可用或未启用时静默降级，不影响主流程。
 
@@ -76,7 +76,11 @@ def record_rating(article: dict, score: int | None, comment: str | None,
 
 
 def get_profile() -> str:
-    """查询 Honcho 对用户的画像（card 文本），空串表示不可用。"""
+    """查询 Honcho 对用户的画像（representation 文本），空串表示不可用。
+
+    真实端点为 POST /v3/workspaces/{ws}/peers/{peer}/representation（不是
+    GET），body 全可选、空对象即可，返回 {"representation": str}。
+    """
     if not enabled():
         return ""
     try:
@@ -85,10 +89,12 @@ def get_profile() -> str:
         with httpx.Client(timeout=TIMEOUT) as c:
             _ensure_workspace(c)
             c.post(f"{_base()}/v3/workspaces/{ws}/peers", json={"id": peer})
-            r = c.get(f"{_base()}/v3/workspaces/{ws}/peers/{peer}/card")
+            r = c.post(
+                f"{_base()}/v3/workspaces/{ws}/peers/{peer}/representation",
+                json={},
+            )
             r.raise_for_status()
-            card = r.json().get("peer_card") or []
-            return "\n".join(card)
+            return r.json().get("representation") or ""
     except Exception as exc:  # noqa: BLE001
         print(f"[honcho] get_profile failed: {exc}")
         return ""

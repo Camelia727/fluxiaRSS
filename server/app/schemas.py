@@ -32,7 +32,7 @@ class RatingOut(BaseModel):
 
 
 class Conclusion(BaseModel):
-    kind: str  # deductive | inductive
+    kind: str  # explicit | deductive | inductive
     statement: str
     confidence: float | None = None
 
@@ -40,6 +40,7 @@ class Conclusion(BaseModel):
 class Profile(BaseModel):
     version: int
     conclusions: list[Conclusion]
+    representation: str = ""  # Honcho 画像原文（best-effort）
 
 
 class SourceInfo(BaseModel):

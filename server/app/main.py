@@ -1,6 +1,7 @@
 """fluxiaRSS API —— P1：评分落库 + 排序 digest。"""
 from __future__ import annotations
 
+import re
 from datetime import date
 
 from fastapi import FastAPI, HTTPException
@@ -10,7 +11,15 @@ from .db import add_rating, get_article, init_db, list_articles
 from .pipeline import run_pipeline
 from .ranking import rank_articles
 from . import honcho_client
-from .schemas import Digest, DigestItem, Profile, RatingIn, RatingOut, SourceInfo
+from .schemas import (
+    Conclusion,
+    Digest,
+    DigestItem,
+    Profile,
+    RatingIn,
+    RatingOut,
+    SourceInfo,
+)
 
 app = FastAPI(title="fluxiaRSS API", version="0.2.0")
 
@@ -62,10 +71,44 @@ def post_rating(r: RatingIn) -> RatingOut:
     return RatingOut(ok=True, article_id=r.article_id)
 
 
+_HEADER_RE = re.compile(r"^##\s+([A-Za-z_]+)")
+_TIMESTAMP_RE = re.compile(r"^\[[^\]]*\]\s*")
+
+
+def _parse_conclusions(rep: str) -> list[Conclusion]:
+    """把 Honcho representation 文本解析成结论列表（best-effort）。
+
+    格式：`## <kind> Observations` 段落后，每行 `[时间戳] 内容`。段落标题
+    决定 kind（explicit/deductive/inductive）；解析不匹配或文本为空时返回
+    空列表，不做强解析，不影响主流程。
+    """
+    if not rep:
+        return []
+    kind = "explicit"
+    out: list[Conclusion] = []
+    for line in rep.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        header = _HEADER_RE.match(line)
+        if header:
+            kind = header.group(1).lower()
+            continue
+        statement = _TIMESTAMP_RE.sub("", line).strip()
+        if statement:
+            out.append(Conclusion(kind=kind, statement=statement))
+    return out
+
+
 @app.get("/api/v1/profile", response_model=Profile)
 def get_profile() -> Profile:
-    """占位：返回空画像（P2 接入 Honcho）。"""
-    return Profile(version=0, conclusions=[])
+    """读取 Honcho 画像（best-effort：未启用/不可用/无数据时返回空画像）。"""
+    rep = honcho_client.get_profile()
+    return Profile(
+        version=1 if rep else 0,
+        conclusions=_parse_conclusions(rep),
+        representation=rep,
+    )
 
 
 @app.get("/api/v1/sources", response_model=list[SourceInfo])
