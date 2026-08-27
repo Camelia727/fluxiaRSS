@@ -1,16 +1,20 @@
-"""fluxiaRSS API —— P0：占位 + 采集/概述/digest 已接线。"""
+"""fluxiaRSS API —— P1：评分落库 + 排序 digest。"""
 from __future__ import annotations
 
 from datetime import date
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from . import config
-from .db import init_db, list_articles
+from .db import add_rating, init_db, list_articles
 from .pipeline import run_pipeline
+from .ranking import rank_articles
 from .schemas import Digest, DigestItem, Profile, RatingIn, RatingOut, SourceInfo
 
-app = FastAPI(title="fluxiaRSS API", version="0.1.0")
+app = FastAPI(title="fluxiaRSS API", version="0.2.0")
+
+# 排序候选池大小（先取最近 N 条再排序取 Top）
+RANK_POOL = 100
 
 
 @app.get("/health")
@@ -26,9 +30,9 @@ def collect() -> dict:
 
 @app.get("/api/v1/digest", response_model=Digest)
 def get_digest(d: date | None = None) -> Digest:
-    """返回库中最近文章（P0 按时间倒序；排序在 P1/P2 接入）。"""
+    """从候选池中按偏好排序，返回 Top N。"""
     init_db()
-    rows = list_articles(config.DEFAULT_DIGEST_SIZE)
+    ranked = rank_articles(list_articles(RANK_POOL))
     items = [
         DigestItem(
             article_id=r["id"],
@@ -36,22 +40,27 @@ def get_digest(d: date | None = None) -> Digest:
             title=r["title"],
             summary=r["summary"] or "",
             url=r["url"],
-            reason="recent",
+            reason=r["reason"],
         )
-        for i, r in enumerate(rows)
+        for i, r in enumerate(ranked)
     ]
     return Digest(date=d or date.today(), items=items)
 
 
 @app.post("/api/v1/rating", response_model=RatingOut)
 def post_rating(r: RatingIn) -> RatingOut:
-    """占位：接收评分，未落库（P2 接入）。"""
+    """持久化评分/评论；文章不存在或评分越界返回 4xx。"""
+    if r.score is not None and not (0 <= r.score <= 10):
+        raise HTTPException(status_code=422, detail="score 须在 0-10 之间")
+    init_db()
+    if not add_rating(r.article_id, r.score, r.comment, r.action):
+        raise HTTPException(status_code=404, detail="article not found")
     return RatingOut(ok=True, article_id=r.article_id)
 
 
 @app.get("/api/v1/profile", response_model=Profile)
 def get_profile() -> Profile:
-    """占位：返回空画像。"""
+    """占位：返回空画像（P2 接入 Honcho）。"""
     return Profile(version=0, conclusions=[])
 
 
