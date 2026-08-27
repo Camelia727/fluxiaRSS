@@ -5,7 +5,7 @@ import re
 from contextlib import asynccontextmanager
 from datetime import date
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 
 from . import config
 from .db import add_rating, get_article, init_db, list_articles
@@ -37,6 +37,12 @@ app = FastAPI(title="fluxiaRSS API", version="0.2.0", lifespan=lifespan)
 RANK_POOL = 100
 
 
+def require_token(x_fluxia_token: str | None = Header(default=None)) -> None:
+    """轻量鉴权：配置了 FLUXIARSS_API_TOKEN 时，校验 X-Fluxia-Token 头。"""
+    if config.FLUXIARSS_API_TOKEN and x_fluxia_token != config.FLUXIARSS_API_TOKEN:
+        raise HTTPException(status_code=401, detail="invalid token")
+
+
 @app.get("/health")
 def health() -> dict:
     """探活；已跑过定时采集时附上上次 at/result。"""
@@ -48,13 +54,14 @@ def health() -> dict:
     return h
 
 
-@app.post("/api/v1/collect")
+@app.post("/api/v1/collect", dependencies=[Depends(require_token)])
 def collect() -> dict:
     """手动触发采集：抓取→概述→落库。"""
     return run_pipeline()
 
 
-@app.get("/api/v1/digest", response_model=Digest)
+@app.get("/api/v1/digest", response_model=Digest,
+         dependencies=[Depends(require_token)])
 def get_digest(d: date | None = None) -> Digest:
     """从候选池中按偏好排序，返回 Top N。"""
     init_db()
@@ -73,7 +80,8 @@ def get_digest(d: date | None = None) -> Digest:
     return Digest(date=d or date.today(), items=items)
 
 
-@app.post("/api/v1/rating", response_model=RatingOut)
+@app.post("/api/v1/rating", response_model=RatingOut,
+          dependencies=[Depends(require_token)])
 def post_rating(r: RatingIn) -> RatingOut:
     """持久化评分/评论；文章不存在或评分越界返回 4xx。"""
     if r.score is not None and not (0 <= r.score <= 10):
@@ -116,7 +124,8 @@ def _parse_conclusions(rep: str) -> list[Conclusion]:
     return out
 
 
-@app.get("/api/v1/profile", response_model=Profile)
+@app.get("/api/v1/profile", response_model=Profile,
+         dependencies=[Depends(require_token)])
 def get_profile() -> Profile:
     """读取 Honcho 画像（best-effort：未启用/不可用/无数据时返回空画像）。"""
     rep = honcho_client.get_profile()
@@ -127,7 +136,8 @@ def get_profile() -> Profile:
     )
 
 
-@app.get("/api/v1/sources", response_model=list[SourceInfo])
+@app.get("/api/v1/sources", response_model=list[SourceInfo],
+         dependencies=[Depends(require_token)])
 def get_sources() -> list[SourceInfo]:
     return [
         SourceInfo(name=f["name"], url=f["url"], topic=f["topic"])

@@ -23,6 +23,10 @@ DB_PATH = os.getenv("FLUXIARSS_DB", "fluxiars.db")
 # 话题与源（可在本地/部署时按需调整）
 KEYWORDS = ["agent", "ai agent", "agent framework", "llm agent", "model release", "agents"]
 
+# API 轻量鉴权：设置了该令牌时，/api/v1/* 请求需带 X-Fluxia-Token 头；
+# 为空则不做校验（本地调试）。/health 始终公开，用于连通性探测。
+FLUXIARSS_API_TOKEN = os.getenv("FLUXIARSS_API_TOKEN", "")
+
 FEEDS = [
     {"name": "Simon Willison", "url": "https://simonwillison.net/atom/everything/", "topic": "agent"},
     {"name": "Latent Space", "url": "https://www.latent.space/feed", "topic": "agent"},

@@ -26,6 +26,7 @@ module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
 var DEFAULT_SETTINGS = {
   apiBase: "http://localhost:8000",
+  apiToken: "",
   digestDir: "FluxiaRSS",
   autoRefreshHour: 6
 };
@@ -115,6 +116,20 @@ var FluxiaRSSPlugin = class extends import_obsidian.Plugin {
   async saveAll() {
     await this.saveData({ settings: this.settings, ratings: this.ratings });
   }
+  /** 带鉴权头的 API 调用：拼 base、附 X-Fluxia-Token（未配置 token 则不附带）。 */
+  async api(urlPath, opts = {}) {
+    var _a, _b;
+    return fetchWithTimeout(
+      {
+        url: `${this.settings.apiBase}${urlPath}`,
+        method: (_a = opts.method) != null ? _a : "GET",
+        contentType: "application/json",
+        headers: this.settings.apiToken ? { "X-Fluxia-Token": this.settings.apiToken } : void 0,
+        body: opts.body !== void 0 ? JSON.stringify(opts.body) : void 0
+      },
+      (_b = opts.timeout) != null ? _b : 1e4
+    );
+  }
   // ---- 拉取与笔记 ----
   getTodayPath() {
     return `${this.settings.digestDir}/${todayStr()}.md`;
@@ -123,13 +138,7 @@ var FluxiaRSSPlugin = class extends import_obsidian.Plugin {
     return this.app.vault.adapter.exists(this.getTodayPath());
   }
   async fetchDigest() {
-    const res = await fetchWithTimeout(
-      {
-        url: `${this.settings.apiBase}/api/v1/digest`,
-        method: "GET"
-      },
-      1e4
-    );
+    const res = await this.api("/api/v1/digest");
     if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
     return res.json;
   }
@@ -191,15 +200,11 @@ var FluxiaRSSPlugin = class extends import_obsidian.Plugin {
   async collectAndRefresh() {
     var _a, _b;
     try {
-      const res = await fetchWithTimeout(
-        {
-          url: `${this.settings.apiBase}/api/v1/collect`,
-          method: "POST",
-          contentType: "application/json",
-          body: JSON.stringify({})
-        },
-        12e4
-      );
+      const res = await this.api("/api/v1/collect", {
+        method: "POST",
+        body: {},
+        timeout: 12e4
+      });
       const body = res.json;
       new import_obsidian.Notice(`\u91C7\u96C6\u5B8C\u6210\uFF1A\u62C9\u53D6 ${(_a = body == null ? void 0 : body.fetched) != null ? _a : "?"}\uFF0C\u65B0\u589E ${(_b = body == null ? void 0 : body.new_added) != null ? _b : "?"}`);
     } catch (e) {
@@ -209,15 +214,10 @@ var FluxiaRSSPlugin = class extends import_obsidian.Plugin {
   }
   // ---- 评分 ----
   async submitRating(articleId, score, action) {
-    const res = await fetchWithTimeout(
-      {
-        url: `${this.settings.apiBase}/api/v1/rating`,
-        method: "POST",
-        contentType: "application/json",
-        body: JSON.stringify({ article_id: articleId, score, action })
-      },
-      1e4
-    );
+    const res = await this.api("/api/v1/rating", {
+      method: "POST",
+      body: { article_id: articleId, score, action }
+    });
     if (res.status !== 200 && res.status !== 201) {
       throw new Error(`HTTP ${res.status}`);
     }
@@ -306,6 +306,14 @@ var FluxiaSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveAll();
       })
     );
+    new import_obsidian.Setting(containerEl).setName("API \u4EE4\u724C").setDesc("\u670D\u52A1\u7AEF .env \u91CC\u7684 FLUXIARSS_API_TOKEN\uFF08\u7559\u7A7A\u5219\u4E0D\u505A\u9274\u6743\uFF0C\u4EC5\u9650\u672C\u673A\u8C03\u8BD5\uFF09").addText((t) => {
+      t.setValue(this.plugin.settings.apiToken).onChange(async (v) => {
+        this.plugin.settings.apiToken = v.trim();
+        await this.plugin.saveAll();
+      });
+      t.inputEl.type = "password";
+      t.inputEl.placeholder = "FLUXIARSS_API_TOKEN \u7684\u503C";
+    });
     new import_obsidian.Setting(containerEl).setName("digest \u76EE\u5F55").setDesc("\u6BCF\u65E5\u7B14\u8BB0\u5B58\u653E\u76EE\u5F55\uFF08vault \u5185\u76F8\u5BF9\u8DEF\u5F84\uFF09").addText(
       (t) => t.setValue(this.plugin.settings.digestDir).onChange(async (v) => {
         this.plugin.settings.digestDir = v.trim() || DEFAULT_SETTINGS.digestDir;

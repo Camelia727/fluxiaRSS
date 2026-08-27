@@ -25,6 +25,8 @@ import {
 interface FluxiaSettings {
   /** 服务端地址，如 http://192.168.1.5:8000 */
   apiBase: string;
+  /** 服务端 API 令牌（FLUXIARSS_API_TOKEN，随 X-Fluxia-Token 头发送） */
+  apiToken: string;
   /** 每日笔记目录（vault 内相对路径） */
   digestDir: string;
   /** 过了该小时且今日笔记不存在时自动生成（0-23） */
@@ -60,6 +62,7 @@ interface RatedAction {
 
 const DEFAULT_SETTINGS: FluxiaSettings = {
   apiBase: "http://localhost:8000",
+  apiToken: "",
   digestDir: "FluxiaRSS",
   autoRefreshHour: 6,
 };
@@ -169,6 +172,25 @@ export default class FluxiaRSSPlugin extends Plugin {
     await this.saveData({ settings: this.settings, ratings: this.ratings });
   }
 
+  /** 带鉴权头的 API 调用：拼 base、附 X-Fluxia-Token（未配置 token 则不附带）。 */
+  async api(
+    urlPath: string,
+    opts: { method?: string; body?: unknown; timeout?: number } = {}
+  ): Promise<RequestUrlResponse> {
+    return fetchWithTimeout(
+      {
+        url: `${this.settings.apiBase}${urlPath}`,
+        method: opts.method ?? "GET",
+        contentType: "application/json",
+        headers: this.settings.apiToken
+          ? { "X-Fluxia-Token": this.settings.apiToken }
+          : undefined,
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      },
+      opts.timeout ?? 10000
+    );
+  }
+
   // ---- 拉取与笔记 ----
 
   getTodayPath(): string {
@@ -180,13 +202,7 @@ export default class FluxiaRSSPlugin extends Plugin {
   }
 
   async fetchDigest(): Promise<Digest> {
-    const res = await fetchWithTimeout(
-      {
-        url: `${this.settings.apiBase}/api/v1/digest`,
-        method: "GET",
-      },
-      10000
-    );
+    const res = await this.api("/api/v1/digest");
     if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
     return res.json as Digest;
   }
@@ -255,15 +271,11 @@ export default class FluxiaRSSPlugin extends Plugin {
 
   async collectAndRefresh(): Promise<void> {
     try {
-      const res = await fetchWithTimeout(
-        {
-          url: `${this.settings.apiBase}/api/v1/collect`,
-          method: "POST",
-          contentType: "application/json",
-          body: JSON.stringify({}),
-        },
-        120000
-      );
+      const res = await this.api("/api/v1/collect", {
+        method: "POST",
+        body: {},
+        timeout: 120000,
+      });
       const body = res.json as { fetched?: number; new_added?: number } | null;
       new Notice(`采集完成：拉取 ${body?.fetched ?? "?"}，新增 ${body?.new_added ?? "?"}`);
     } catch (e) {
@@ -279,15 +291,10 @@ export default class FluxiaRSSPlugin extends Plugin {
     score: number | null,
     action: string
   ): Promise<void> {
-    const res = await fetchWithTimeout(
-      {
-        url: `${this.settings.apiBase}/api/v1/rating`,
-        method: "POST",
-        contentType: "application/json",
-        body: JSON.stringify({ article_id: articleId, score, action }),
-      },
-      10000
-    );
+    const res = await this.api("/api/v1/rating", {
+      method: "POST",
+      body: { article_id: articleId, score, action },
+    });
     if (res.status !== 200 && res.status !== 201) {
       throw new Error(`HTTP ${res.status}`);
     }
@@ -398,6 +405,18 @@ class FluxiaSettingTab extends PluginSettingTab {
             await this.plugin.saveAll();
           })
       );
+
+    new Setting(containerEl)
+      .setName("API 令牌")
+      .setDesc("服务端 .env 里的 FLUXIARSS_API_TOKEN（留空则不做鉴权，仅限本机调试）")
+      .addText((t) => {
+        t.setValue(this.plugin.settings.apiToken).onChange(async (v) => {
+          this.plugin.settings.apiToken = v.trim();
+          await this.plugin.saveAll();
+        });
+        t.inputEl.type = "password";
+        t.inputEl.placeholder = "FLUXIARSS_API_TOKEN 的值";
+      });
 
     new Setting(containerEl)
       .setName("digest 目录")

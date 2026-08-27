@@ -53,6 +53,7 @@ npm run dev        # watch 模式
 
 ## 与后端契约
 
+- 鉴权：服务端配置了 `FLUXIARSS_API_TOKEN` 时，所有请求带 `X-Fluxia-Token` 头；插件设置里填入同一令牌
 - `GET {api}/api/v1/digest` → `{date, items:[{article_id, rank, title, summary, url, reason}]}`
 - `POST {api}/api/v1/rating` → body `{article_id, score?, action}`，`score` 0-10（可省略），`action ∈ read|skip|later`
 - `POST {api}/api/v1/collect` → 触发采集，返回 `{fetched, new_added}`
