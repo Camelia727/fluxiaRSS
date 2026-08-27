@@ -1,15 +1,25 @@
-"""fluxiaRSS 服务端配置。"""
+"""fluxiaRSS 服务端配置 —— 从环境变量读取，密钥不入库。
+
+复制 server/.env.example 为 .env 并按需修改；运行前加载环境变量。
+"""
 from __future__ import annotations
 
-APP_NAME = "fluxiaRSS"
+import os
+
+from dotenv import load_dotenv
+
+# 自动加载 server 目录下的 .env（含密钥，不入库）
+load_dotenv()
+
+APP_NAME = os.getenv("FLUXIARSS_APP_NAME", "fluxiaRSS")
 API_PREFIX = "/api/v1"
-DEFAULT_DIGEST_SIZE = 8
-EXPLORATION_BUDGET = 0.15
+DEFAULT_DIGEST_SIZE = int(os.getenv("DIGEST_SIZE", "8"))
+EXPLORATION_BUDGET = float(os.getenv("EXPLORATION_BUDGET", "0.15"))
 
-# 数据库
-DB_PATH = "fluxiars.db"
+# 数据库（本地文件）
+DB_PATH = os.getenv("FLUXIARSS_DB", "fluxiars.db")
 
-# 话题与源
+# 话题与源（可在本地/部署时按需调整）
 KEYWORDS = ["agent", "ai agent", "agent framework", "llm agent", "model release", "agents"]
 
 FEEDS = [
@@ -25,9 +35,10 @@ FEEDS = [
 ]
 
 # 采集限制：单源单轮最多新增条数（防 arXiv 等大源刷库）
-PER_FEED_CAP = 20
+PER_FEED_CAP = int(os.getenv("PER_FEED_CAP", "20"))
 
 # DeepSeek（OpenAI 兼容）
-DEEPSEEK_BASE = "https://api.deepseek.com/v1"
-DEEPSEEK_MODEL = "deepseek-chat"
-DEEPSEEK_TIMEOUT = 40
+DEEPSEEK_BASE = os.getenv("DEEPSEEK_BASE", "https://api.deepseek.com/v1")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+DEEPSEEK_TIMEOUT = int(os.getenv("DEEPSEEK_TIMEOUT", "40"))
+

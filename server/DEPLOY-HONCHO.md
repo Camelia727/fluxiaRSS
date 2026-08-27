@@ -16,6 +16,8 @@
         Embedding: 豆包/火山方舟 (OpenAI 兼容, 云端)
 ```
 
+> 运行 key 类配置请参考根目录 server/.env.example（勿提交真实 key）。
+
 ## 前置条件
 - 服务器已装 Docker + docker compose
 - 两个 key：
@@ -98,3 +100,4 @@ docker compose logs deriver | tail   # 应无 BadRequestError / 401
 - **不要**本地部署 ONNX embedding（~900MB 会 OOM）
 - 火山方舟/DeepSeek 都走海外→国内跨境，调用小、频率低，延迟可接受
 - 若日后拿到 Anthropic key，可切 `LLM_ANTHROPIC_API_KEY`，且无需 json_schema 补丁（native 结构化输出）
+
