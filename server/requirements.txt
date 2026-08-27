@@ -6,4 +6,3 @@ httpx
 
 python-dotenv
 
-honcho-ai
