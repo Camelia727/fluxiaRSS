@@ -6,9 +6,10 @@ from datetime import date
 from fastapi import FastAPI, HTTPException
 
 from . import config
-from .db import add_rating, init_db, list_articles
+from .db import add_rating, get_article, init_db, list_articles
 from .pipeline import run_pipeline
 from .ranking import rank_articles
+from . import honcho_client
 from .schemas import Digest, DigestItem, Profile, RatingIn, RatingOut, SourceInfo
 
 app = FastAPI(title="fluxiaRSS API", version="0.2.0")
@@ -55,6 +56,9 @@ def post_rating(r: RatingIn) -> RatingOut:
     init_db()
     if not add_rating(r.article_id, r.score, r.comment, r.action):
         raise HTTPException(status_code=404, detail="article not found")
+    article = get_article(r.article_id)
+    if article:
+        honcho_client.record_rating(article, r.score, r.comment, r.action)
     return RatingOut(ok=True, article_id=r.article_id)
 
 
@@ -70,3 +74,4 @@ def get_sources() -> list[SourceInfo]:
         SourceInfo(name=f["name"], url=f["url"], topic=f["topic"])
         for f in config.FEEDS
     ]
+

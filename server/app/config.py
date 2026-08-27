@@ -46,5 +46,13 @@ DEEPSEEK_BASE = os.getenv("DEEPSEEK_BASE", "https://api.deepseek.com/v1")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 DEEPSEEK_TIMEOUT = int(os.getenv("DEEPSEEK_TIMEOUT", "40"))
 
+# Honcho（记忆层）
+HONCHO_ENABLED = os.getenv("HONCHO_ENABLED", "0") == "1"
+HONCHO_BASE_URL = os.getenv("HONCHO_BASE_URL", "http://localhost:8001")
+HONCHO_WORKSPACE_ID = os.getenv("HONCHO_WORKSPACE_ID", "")
+HONCHO_PEER_ID = os.getenv("HONCHO_PEER_ID", "user")
+HONCHO_SESSION_ID = os.getenv("HONCHO_SESSION_ID", "reading")
+
+
 
 
