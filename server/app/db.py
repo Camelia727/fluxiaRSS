@@ -73,9 +73,23 @@ def list_articles(limit: int) -> list[dict]:
 
 def add_rating(article_id: str, score: int | None, comment: str | None,
                action: str) -> bool:
-    """记录一条评分/评论；文章不存在返回 False。"""
+    """记录一条评分/评论；文章不存在返回 False。
+
+    action == "comment" 且 score 为空时视为「给最近一条评分补评论」：
+    更新该文章最近一条尚未带评论的评分行；若无行可更新，退化为插入一条
+    纯评论（score 为 NULL，不影响任何均分计算）。
+    """
     if not get_article(article_id):
         return False
+    if comment and score is None and action == "comment":
+        with _conn() as conn:
+            cur = conn.execute(
+                "UPDATE ratings SET comment=? WHERE article_id=? AND comment IS NULL "
+                "ORDER BY time DESC LIMIT 1",
+                (comment, article_id),
+            )
+            if cur.rowcount:
+                return True
     with _conn() as conn:
         conn.execute(
             "INSERT INTO ratings (article_id, score, comment, action, time) "

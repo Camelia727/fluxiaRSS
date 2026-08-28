@@ -23,7 +23,7 @@ class RatingIn(BaseModel):
     article_id: str
     score: int | None = None
     comment: str | None = None
-    action: str = "read"  # read | skip | later
+    action: str = "read"  # read | skip | later | comment
 
 
 class RatingOut(BaseModel):

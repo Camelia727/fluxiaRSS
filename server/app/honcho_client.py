@@ -48,9 +48,10 @@ def record_rating(article: dict, score: int | None, comment: str | None,
                 f"{_base()}/v3/workspaces/{ws}/sessions",
                 json={"id": session_id, "peers": {peer: {}}},
             )
+            score_txt = f"评分 {score}/10" if score is not None else "评分：无（仅评论）"
             content = (
-                f"阅读反馈：{article.get('title', '')}。"
-                f"评分 {score}/10。评论：{comment or '无'}。动作：{action}。"
+                f"阅读反馈：{article.get('title', '')}。{score_txt}。"
+                f"评论：{comment or '无'}。动作：{action}。"
                 f"来源：{article.get('source', '')}。"
             )
             metadata = {

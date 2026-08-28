@@ -73,3 +73,20 @@
   color: var(--color-green);
   font-size: 0.8em;
 }
+
+.fluxiars-comment {
+  margin-top: 6px;
+}
+
+.fluxiars-comment-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 0.85em;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.fluxiars-comment-text {
+  font-size: 0.8em;
+  color: var(--text-muted);
+}

@@ -33,10 +33,17 @@ interface FluxiaSettings {
   autoRefreshHour: number;
 }
 
+interface RatedState {
+  score: number | null;
+  action: string;
+  /** 可选评论（评分后补写，随 X-Fluxia-Token 一并提交） */
+  comment?: string;
+}
+
 interface PluginData {
   settings: FluxiaSettings;
   /** article_id → 已评状态（用于渲染 ✓ 与跨笔记/重启保持） */
-  ratings: Record<string, { score: number | null; action: string }>;
+  ratings: Record<string, RatedState>;
 }
 
 interface DigestItem {
@@ -110,7 +117,7 @@ function ratedText(r: RatedAction): string {
 
 export default class FluxiaRSSPlugin extends Plugin {
   settings: FluxiaSettings;
-  ratings: Record<string, { score: number | null; action: string }> = {};
+  ratings: Record<string, RatedState> = {};
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -301,6 +308,20 @@ export default class FluxiaRSSPlugin extends Plugin {
     this.ratings[articleId] = { score, action };
     await this.saveAll();
   }
+
+  /** 给已评分文章补写评论（action=comment，服务端更新最近一条评分行的 comment）。 */
+  async submitComment(articleId: string, comment: string): Promise<void> {
+    const res = await this.api("/api/v1/rating", {
+      method: "POST",
+      body: { article_id: articleId, comment, action: "comment" },
+    });
+    if (res.status !== 200 && res.status !== 201) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const prev = this.ratings[articleId] ?? { score: null, action: "read" };
+    this.ratings[articleId] = { ...prev, comment };
+    await this.saveAll();
+  }
 }
 
 // ---- 渲染 ----
@@ -351,14 +372,15 @@ class DigestRenderer {
     }
 
     const row = card.createDiv({ cls: "fluxiars-actions" });
-    this.renderActions(row, item);
+    this.renderActions(row, card, item);
   }
 
-  private renderActions(row: HTMLElement, item: DigestItem): void {
+  private renderActions(row: HTMLElement, card: HTMLElement, item: DigestItem): void {
     const rated = this.plugin.ratings[item.article_id];
     if (rated) {
       const r: RatedAction = { score: rated.score, action: rated.action, label: "" };
       row.createEl("span", { cls: "fluxiars-rated", text: ratedText(r) });
+      this.renderCommentArea(card, item, rated);
       return;
     }
 
@@ -371,6 +393,7 @@ class DigestRenderer {
           await this.plugin.submitRating(item.article_id, ra.score, ra.action);
           row.empty();
           row.createEl("span", { cls: "fluxiars-rated", text: ratedText(ra) });
+          this.renderCommentArea(card, item, this.plugin.ratings[item.article_id]);
           new Notice("已记录反馈 ✔");
         } catch (e) {
           btn.disabled = false;
@@ -379,6 +402,43 @@ class DigestRenderer {
         }
       });
     }
+  }
+
+  /** 卡片评论区：已有评论则显示，否则放一个可选的评论输入框（Enter 提交）。 */
+  private renderCommentArea(
+    card: HTMLElement,
+    item: DigestItem,
+    rated: RatedState | undefined
+  ): void {
+    card.querySelector(".fluxiars-comment")?.remove();
+    if (!rated) return;
+
+    const area = card.createDiv({ cls: "fluxiars-comment" });
+    if (rated.comment) {
+      area.createEl("span", { cls: "fluxiars-comment-text", text: `💬 ${rated.comment}` });
+      return;
+    }
+
+    const input = area.createEl("input", {
+      cls: "fluxiars-comment-input",
+      type: "text",
+      placeholder: "✍️ 想记一句？（Enter 提交，可跳过）",
+    });
+    input.addEventListener("keydown", async (ev) => {
+      if (ev.key !== "Enter") return;
+      const text = input.value.trim();
+      if (!text) return;
+      input.disabled = true;
+      try {
+        await this.plugin.submitComment(item.article_id, text);
+        area.empty();
+        area.createEl("span", { cls: "fluxiars-comment-text", text: `💬 ${text}` });
+        new Notice("评论已记录 ✔");
+      } catch (e) {
+        input.disabled = false;
+        new Notice(`评论失败：${(e as Error).message}`);
+      }
+    });
   }
 }
 

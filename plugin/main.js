@@ -224,6 +224,20 @@ var FluxiaRSSPlugin = class extends import_obsidian.Plugin {
     this.ratings[articleId] = { score, action };
     await this.saveAll();
   }
+  /** 给已评分文章补写评论（action=comment，服务端更新最近一条评分行的 comment）。 */
+  async submitComment(articleId, comment) {
+    var _a;
+    const res = await this.api("/api/v1/rating", {
+      method: "POST",
+      body: { article_id: articleId, comment, action: "comment" }
+    });
+    if (res.status !== 200 && res.status !== 201) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const prev = (_a = this.ratings[articleId]) != null ? _a : { score: null, action: "read" };
+    this.ratings[articleId] = { ...prev, comment };
+    await this.saveAll();
+  }
 };
 var DigestRenderer = class {
   constructor(plugin, digest) {
@@ -263,13 +277,14 @@ var DigestRenderer = class {
       card.createEl("div", { cls: "fluxiars-summary", text: item.summary });
     }
     const row = card.createDiv({ cls: "fluxiars-actions" });
-    this.renderActions(row, item);
+    this.renderActions(row, card, item);
   }
-  renderActions(row, item) {
+  renderActions(row, card, item) {
     const rated = this.plugin.ratings[item.article_id];
     if (rated) {
       const r = { score: rated.score, action: rated.action, label: "" };
       row.createEl("span", { cls: "fluxiars-rated", text: ratedText(r) });
+      this.renderCommentArea(card, item, rated);
       return;
     }
     for (const ra of RATED_ACTIONS) {
@@ -281,6 +296,7 @@ var DigestRenderer = class {
           await this.plugin.submitRating(item.article_id, ra.score, ra.action);
           row.empty();
           row.createEl("span", { cls: "fluxiars-rated", text: ratedText(ra) });
+          this.renderCommentArea(card, item, this.plugin.ratings[item.article_id]);
           new import_obsidian.Notice("\u5DF2\u8BB0\u5F55\u53CD\u9988 \u2714");
         } catch (e) {
           btn.disabled = false;
@@ -289,6 +305,37 @@ var DigestRenderer = class {
         }
       });
     }
+  }
+  /** 卡片评论区：已有评论则显示，否则放一个可选的评论输入框（Enter 提交）。 */
+  renderCommentArea(card, item, rated) {
+    var _a;
+    (_a = card.querySelector(".fluxiars-comment")) == null ? void 0 : _a.remove();
+    if (!rated) return;
+    const area = card.createDiv({ cls: "fluxiars-comment" });
+    if (rated.comment) {
+      area.createEl("span", { cls: "fluxiars-comment-text", text: `\u{1F4AC} ${rated.comment}` });
+      return;
+    }
+    const input = area.createEl("input", {
+      cls: "fluxiars-comment-input",
+      type: "text",
+      placeholder: "\u270D\uFE0F \u60F3\u8BB0\u4E00\u53E5\uFF1F\uFF08Enter \u63D0\u4EA4\uFF0C\u53EF\u8DF3\u8FC7\uFF09"
+    });
+    input.addEventListener("keydown", async (ev) => {
+      if (ev.key !== "Enter") return;
+      const text = input.value.trim();
+      if (!text) return;
+      input.disabled = true;
+      try {
+        await this.plugin.submitComment(item.article_id, text);
+        area.empty();
+        area.createEl("span", { cls: "fluxiars-comment-text", text: `\u{1F4AC} ${text}` });
+        new import_obsidian.Notice("\u8BC4\u8BBA\u5DF2\u8BB0\u5F55 \u2714");
+      } catch (e) {
+        input.disabled = false;
+        new import_obsidian.Notice(`\u8BC4\u8BBA\u5931\u8D25\uFF1A${e.message}`);
+      }
+    });
   }
 };
 var FluxiaSettingTab = class extends import_obsidian.PluginSettingTab {
