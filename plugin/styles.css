@@ -37,6 +37,12 @@
   font-weight: 600;
 }
 
+.fluxiars-source {
+  font-size: 0.8em;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
 .fluxiars-reason {
   font-size: 0.8em;
   color: var(--text-muted);

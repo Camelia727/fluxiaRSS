@@ -270,6 +270,9 @@ var DigestRenderer = class {
       ev.preventDefault();
       window.open(item.url, "_blank");
     });
+    if (item.source) {
+      card.createEl("div", { cls: "fluxiars-source", text: `\u6765\u6E90\uFF1A${item.source}` });
+    }
     if (item.reason) {
       card.createEl("div", { cls: "fluxiars-reason", text: `\u6392\u5E8F\uFF1A${item.reason}` });
     }

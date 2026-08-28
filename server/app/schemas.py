@@ -12,6 +12,7 @@ class DigestItem(BaseModel):
     summary: str
     url: str
     reason: str
+    source: str = ""  # 来源（RSS 源名）；老数据可能缺失，默认空串
 
 
 class Digest(BaseModel):

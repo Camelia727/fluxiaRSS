@@ -74,6 +74,7 @@ def get_digest(d: date | None = None) -> Digest:
             summary=r["summary"] or "",
             url=r["url"],
             reason=r["reason"],
+            source=r["source"] or "",
         )
         for i, r in enumerate(ranked)
     ]

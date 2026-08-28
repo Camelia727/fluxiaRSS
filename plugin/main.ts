@@ -53,6 +53,8 @@ interface DigestItem {
   summary: string;
   url: string;
   reason: string;
+  /** 来源（RSS 源名）；老数据可能缺失 */
+  source?: string;
 }
 
 interface Digest {
@@ -364,6 +366,9 @@ class DigestRenderer {
         window.open(item.url, "_blank");
       });
 
+    if (item.source) {
+      card.createEl("div", { cls: "fluxiars-source", text: `来源：${item.source}` });
+    }
     if (item.reason) {
       card.createEl("div", { cls: "fluxiars-reason", text: `排序：${item.reason}` });
     }
