@@ -32,9 +32,6 @@ var DEFAULT_SETTINGS = {
   autoRefreshHour: 6
 };
 var RATED_ACTIONS = [
-  { score: 9, action: "read", label: "\u{1F44D} \u9AD8" },
-  { score: 5, action: "read", label: "\u2B50 \u4E2D" },
-  { score: 1, action: "read", label: "\u{1F44E} \u4F4E" },
   { score: null, action: "later", label: "\u{1F552} \u7A0D\u540E\u8BFB" },
   { score: null, action: "skip", label: "\u23ED \u8DF3\u8FC7" }
 ];
@@ -291,23 +288,49 @@ var DigestRenderer = class {
       this.renderCommentArea(card, item, rated);
       return;
     }
+    const scoreInput = row.createEl("input", {
+      cls: "fluxiars-score-input",
+      type: "number",
+      placeholder: "0-10",
+      attr: { min: "0", max: "10", step: "1" }
+    });
+    const scoreBtn = row.createEl("button", { cls: "fluxiars-btn", text: "\u2713 \u6253\u5206" });
+    const doScore = () => {
+      const raw = scoreInput.value.trim();
+      const v = Number(raw);
+      if (raw === "" || !Number.isInteger(v) || v < 0 || v > 10) {
+        new import_obsidian.Notice("\u8BF7\u8F93\u5165 0-10 \u7684\u6574\u6570\u5206\u6570");
+        return;
+      }
+      void this.complete(scoreBtn, item, row, card, v, "read", "\u2713 \u6253\u5206");
+    };
+    scoreInput.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") doScore();
+    });
+    scoreBtn.addEventListener("click", doScore);
     for (const ra of RATED_ACTIONS) {
       const btn = row.createEl("button", { cls: "fluxiars-btn", text: ra.label });
-      btn.addEventListener("click", async () => {
-        btn.disabled = true;
-        btn.setText("\u2026");
-        try {
-          await this.plugin.submitRating(item.article_id, ra.score, ra.action);
-          row.empty();
-          row.createEl("span", { cls: "fluxiars-rated", text: ratedText(ra) });
-          this.renderCommentArea(card, item, this.plugin.ratings[item.article_id]);
-          new import_obsidian.Notice("\u5DF2\u8BB0\u5F55\u53CD\u9988 \u2714");
-        } catch (e) {
-          btn.disabled = false;
-          btn.setText(ra.label);
-          new import_obsidian.Notice(`\u8BC4\u5206\u5931\u8D25\uFF1A${e.message}`);
-        }
-      });
+      btn.addEventListener(
+        "click",
+        () => void this.complete(btn, item, row, card, null, ra.action, ra.label)
+      );
+    }
+  }
+  /** 提交评分/动作并刷新卡片状态；失败则恢复按钮，不静默。 */
+  async complete(btn, item, row, card, score, action, label) {
+    btn.disabled = true;
+    btn.setText("\u2026");
+    try {
+      await this.plugin.submitRating(item.article_id, score, action);
+      row.empty();
+      const ra = { score, action, label: "" };
+      row.createEl("span", { cls: "fluxiars-rated", text: ratedText(ra) });
+      this.renderCommentArea(card, item, this.plugin.ratings[item.article_id]);
+      new import_obsidian.Notice("\u5DF2\u8BB0\u5F55\u53CD\u9988 \u2714");
+    } catch (e) {
+      btn.disabled = false;
+      btn.setText(label);
+      new import_obsidian.Notice(`\u8BC4\u5206\u5931\u8D25\uFF1A${e.message}`);
     }
   }
   /** 卡片评论区：已有评论则显示，否则放一个可选的评论输入框（Enter 提交）。 */

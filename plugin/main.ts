@@ -15,7 +15,7 @@ import {
  *
  * 形态：每天在 vault 指定目录生成一篇 `YYYY-MM-DD.md`，内含一个
  * `fluxiars` 代码块（JSON 为 digest 数据）。阅读视图中由本插件把该代码块
- * 渲染成卡片列表 + 五档打分按钮；点击按钮 POST 回服务端 /api/v1/rating，
+ * 渲染成卡片列表 + 自由打分（0-10）；提交 POST 回服务端 /api/v1/rating，
  * 反馈进入 SQLite + Honcho 记忆，反哺下一轮排序与采集筛选。
  *
  * 约束（README 对齐）：纯拉取 + 后台异步；请求超时 ~10s；失败结构化报错，
@@ -88,11 +88,8 @@ const DEFAULT_SETTINGS: FluxiaSettings = {
   autoRefreshHour: 6,
 };
 
-/** 五档快捷：👍高 / ⭐中 / 👎低 / 🕒稍后读 / ⏭跳过 */
+/** 非打分快捷动作：稍后读 / 跳过（打分改为自由输入 0-10） */
 const RATED_ACTIONS: RatedAction[] = [
-  { score: 9, action: "read", label: "👍 高" },
-  { score: 5, action: "read", label: "⭐ 中" },
-  { score: 1, action: "read", label: "👎 低" },
   { score: null, action: "later", label: "🕒 稍后读" },
   { score: null, action: "skip", label: "⏭ 跳过" },
 ];
@@ -401,23 +398,60 @@ class DigestRenderer {
       return;
     }
 
+    // 自由打分：0-10 数字输入（Enter 或「打分」按钮提交）
+    const scoreInput = row.createEl("input", {
+      cls: "fluxiars-score-input",
+      type: "number",
+      placeholder: "0-10",
+      attr: { min: "0", max: "10", step: "1" },
+    });
+    const scoreBtn = row.createEl("button", { cls: "fluxiars-btn", text: "✓ 打分" });
+    const doScore = (): void => {
+      const raw = scoreInput.value.trim();
+      const v = Number(raw);
+      if (raw === "" || !Number.isInteger(v) || v < 0 || v > 10) {
+        new Notice("请输入 0-10 的整数分数");
+        return;
+      }
+      void this.complete(scoreBtn, item, row, card, v, "read", "✓ 打分");
+    };
+    scoreInput.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") doScore();
+    });
+    scoreBtn.addEventListener("click", doScore);
+
+    // 非打分快捷动作：稍后读 / 跳过
     for (const ra of RATED_ACTIONS) {
       const btn = row.createEl("button", { cls: "fluxiars-btn", text: ra.label });
-      btn.addEventListener("click", async () => {
-        btn.disabled = true;
-        btn.setText("…");
-        try {
-          await this.plugin.submitRating(item.article_id, ra.score, ra.action);
-          row.empty();
-          row.createEl("span", { cls: "fluxiars-rated", text: ratedText(ra) });
-          this.renderCommentArea(card, item, this.plugin.ratings[item.article_id]);
-          new Notice("已记录反馈 ✔");
-        } catch (e) {
-          btn.disabled = false;
-          btn.setText(ra.label);
-          new Notice(`评分失败：${(e as Error).message}`);
-        }
-      });
+      btn.addEventListener("click", () =>
+        void this.complete(btn, item, row, card, null, ra.action, ra.label)
+      );
+    }
+  }
+
+  /** 提交评分/动作并刷新卡片状态；失败则恢复按钮，不静默。 */
+  private async complete(
+    btn: HTMLButtonElement,
+    item: DigestItem,
+    row: HTMLElement,
+    card: HTMLElement,
+    score: number | null,
+    action: string,
+    label: string
+  ): Promise<void> {
+    btn.disabled = true;
+    btn.setText("…");
+    try {
+      await this.plugin.submitRating(item.article_id, score, action);
+      row.empty();
+      const ra: RatedAction = { score, action, label: "" };
+      row.createEl("span", { cls: "fluxiars-rated", text: ratedText(ra) });
+      this.renderCommentArea(card, item, this.plugin.ratings[item.article_id]);
+      new Notice("已记录反馈 ✔");
+    } catch (e) {
+      btn.disabled = false;
+      btn.setText(label);
+      new Notice(`评分失败：${(e as Error).message}`);
     }
   }
 
