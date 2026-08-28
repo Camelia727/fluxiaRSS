@@ -8,14 +8,14 @@ import feedparser
 
 from app import config
 from app.collector import _entry_age_days, _hash, _relevant
-from app.db import get_article, init_db
+from app.db import get_article, init_db, list_sources
 
 
 def main() -> None:
     init_db()
     print(f"{'SOURCE':<22}{'RAW':>6}{'REL':>6}{'NEW':>6}")
     with httpx.Client(follow_redirects=True, timeout=20) as client:
-        for feed in config.FEEDS:
+        for feed in list_sources():
             try:
                 text = client.get(feed["url"]).text
                 parsed = feedparser.parse(text)

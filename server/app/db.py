@@ -1,10 +1,12 @@
 """fluxiaRSS SQLite 数据层。"""
 from __future__ import annotations
 
+import hashlib
 import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 from . import config
 
@@ -42,6 +44,29 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sources (
+                id       TEXT PRIMARY KEY,
+                url      TEXT NOT NULL UNIQUE,
+                name     TEXT NOT NULL,
+                topic    TEXT NOT NULL DEFAULT 'custom',
+                custom   INTEGER NOT NULL DEFAULT 0,
+                added_at TEXT NOT NULL
+            )
+            """
+        )
+        # 首次初始化时用 config.FEEDS 播种内置源；非空表不重复播种（用户删除的
+        # 内置源不会因重启复活）
+        row = conn.execute("SELECT COUNT(*) AS n FROM sources").fetchone()
+        if row and row["n"] == 0:
+            now = datetime.now(timezone.utc).isoformat()
+            for f in config.FEEDS:
+                conn.execute(
+                    "INSERT INTO sources (id, url, name, topic, custom, added_at) "
+                    "VALUES (?, ?, ?, ?, 0, ?)",
+                    (_hash(f["url"]), f["url"], f["name"], f["topic"], now),
+                )
 
 
 def get_article(aid: str) -> dict | None:
@@ -69,6 +94,53 @@ def list_articles(limit: int) -> list[dict]:
             "SELECT * FROM articles ORDER BY fetched_at DESC LIMIT ?", (limit,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def _hash(url: str) -> str:
+    """与 collector 一致的 URL 指纹，用作 sources 主键。"""
+    return hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
+
+
+def list_sources() -> list[dict]:
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM sources ORDER BY added_at, name"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def add_source(url: str, name: str | None = None,
+               topic: str | None = None) -> dict | None:
+    """新增/更新一个 RSS 源（按 URL 幂等 upsert，标记为自定义）。URL 非法返回 None。"""
+    url = (url or "").strip()
+    if not url.startswith(("http://", "https://")):
+        return None
+    try:
+        host = urlparse(url).netloc or url
+    except ValueError:
+        host = url
+    name = (name or "").strip() or host
+    topic = (topic or "").strip() or "custom"
+    with _conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO sources (id, url, name, topic, custom, added_at)
+            VALUES (?, ?, ?, ?, 1, ?)
+            ON CONFLICT(url) DO UPDATE SET name=excluded.name,
+                                           topic=excluded.topic,
+                                           custom=1
+            """,
+            (_hash(url), url, name, topic,
+             datetime.now(timezone.utc).isoformat()),
+        )
+        row = conn.execute("SELECT * FROM sources WHERE url=?", (url,)).fetchone()
+        return dict(row)
+
+
+def remove_source(url: str) -> bool:
+    with _conn() as conn:
+        cur = conn.execute("DELETE FROM sources WHERE url=?", (url,))
+        return cur.rowcount > 0
 
 
 def add_rating(article_id: str, score: int | None, comment: str | None,

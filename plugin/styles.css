@@ -96,3 +96,99 @@
   font-size: 0.8em;
   color: var(--text-muted);
 }
+
+/* ---- 设置页：RSS 源管理 ---- */
+.fluxiars-source-bar {
+  margin: 4px 0 6px;
+}
+
+.fluxiars-source-refresh {
+  font-size: 0.8em;
+  padding: 2px 10px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.fluxiars-source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 8px;
+}
+
+.fluxiars-source-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.fluxiars-source-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.fluxiars-source-name {
+  font-weight: 600;
+  font-size: 0.9em;
+}
+
+.fluxiars-source-url {
+  font-size: 0.78em;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
+}
+
+.fluxiars-source-badge {
+  font-size: 0.7em;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.fluxiars-source-badge-custom {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.fluxiars-source-del {
+  font-size: 0.75em;
+  padding: 1px 8px;
+  cursor: pointer;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.fluxiars-source-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 0.85em;
+  padding: 4px 8px;
+  margin-bottom: 4px;
+  border-radius: 4px;
+}
+
+.fluxiars-source-addbtn {
+  font-size: 0.85em;
+  padding: 3px 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  margin-top: 2px;
+}
+
+.fluxiars-source-muted {
+  font-size: 0.8em;
+  color: var(--text-muted);
+  margin: 4px 0;
+}

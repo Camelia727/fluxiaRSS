@@ -376,5 +376,113 @@ var FluxiaSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveAll();
       })
     );
+    this.renderSourcesSection(containerEl);
+  }
+  // ---- RSS 源管理（服务端 DB 持久化） ----
+  renderSourcesSection(containerEl) {
+    containerEl.createEl("h3", { text: "RSS \u6E90" });
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text: "\u589E\u5220\u81EA\u5B9A\u4E49 RSS \u6E90\uFF08\u5185\u7F6E\u6E90\u4E5F\u5217\u4E8E\u6B64\uFF09\u3002\u6539\u52A8\u540E\u8FD0\u884C\u300C\u7ACB\u5373\u91C7\u96C6\u5E76\u5237\u65B0\u300D\u62C9\u53D6\u65B0\u6E90\u3002"
+    });
+    const bar = containerEl.createDiv({ cls: "fluxiars-source-bar" });
+    bar.createEl("button", { text: "\u{1F504} \u5237\u65B0\u5217\u8868", cls: "fluxiars-source-refresh" }).addEventListener("click", () => this.refreshSources(listEl));
+    const listEl = containerEl.createDiv({ cls: "fluxiars-source-list" });
+    listEl.createEl("p", { cls: "fluxiars-source-muted", text: "\u52A0\u8F7D\u4E2D\u2026" });
+    const nameInput = containerEl.createEl("input", {
+      type: "text",
+      placeholder: "\u540D\u79F0\uFF08\u53EF\u9009\uFF0C\u9ED8\u8BA4\u7528\u57DF\u540D\uFF09",
+      cls: "fluxiars-source-input"
+    });
+    const urlInput = containerEl.createEl("input", {
+      type: "text",
+      placeholder: "RSS URL\uFF08\u5FC5\u586B\uFF0C\u5982 https://example.com/feed.xml\uFF09",
+      cls: "fluxiars-source-input"
+    });
+    const addBtn = containerEl.createEl("button", {
+      text: "\uFF0B \u6DFB\u52A0\u6E90",
+      cls: "fluxiars-source-addbtn"
+    });
+    urlInput.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") addBtn.click();
+    });
+    addBtn.addEventListener("click", async () => {
+      const url = urlInput.value.trim();
+      if (!url) {
+        new import_obsidian.Notice("\u8BF7\u5148\u586B\u5199 RSS URL");
+        return;
+      }
+      addBtn.disabled = true;
+      addBtn.setText("\u6DFB\u52A0\u4E2D\u2026");
+      try {
+        const res = await this.plugin.api("/api/v1/sources", {
+          method: "POST",
+          body: { url, name: nameInput.value.trim() || void 0 }
+        });
+        if (res.status !== 200 && res.status !== 201) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        nameInput.value = "";
+        urlInput.value = "";
+        await this.refreshSources(listEl);
+        new import_obsidian.Notice("\u6E90\u5DF2\u6DFB\u52A0 \u2714");
+      } catch (e) {
+        new import_obsidian.Notice(`\u6DFB\u52A0\u5931\u8D25\uFF1A${e.message}`);
+      } finally {
+        addBtn.disabled = false;
+        addBtn.setText("\uFF0B \u6DFB\u52A0\u6E90");
+      }
+    });
+    void this.refreshSources(listEl);
+  }
+  /** 拉取 /api/v1/sources 并渲染列表；失败时在列表位显示错误而非抛错。 */
+  async refreshSources(listEl) {
+    var _a;
+    listEl.empty();
+    listEl.createEl("p", { cls: "fluxiars-source-muted", text: "\u52A0\u8F7D\u4E2D\u2026" });
+    try {
+      const res = await this.plugin.api("/api/v1/sources");
+      if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
+      const sources = (_a = res.json) != null ? _a : [];
+      listEl.empty();
+      if (sources.length === 0) {
+        listEl.createEl("p", { cls: "fluxiars-source-muted", text: "\uFF08\u6682\u65E0\u6E90\uFF0C\u8BF7\u6DFB\u52A0\uFF09" });
+        return;
+      }
+      for (const s of sources) {
+        const row = listEl.createDiv({ cls: "fluxiars-source-row" });
+        const info = row.createDiv({ cls: "fluxiars-source-info" });
+        info.createEl("span", { cls: "fluxiars-source-name", text: s.name });
+        info.createEl("span", { cls: "fluxiars-source-url", text: s.url });
+        info.createEl("span", {
+          cls: s.custom ? "fluxiars-source-badge fluxiars-source-badge-custom" : "fluxiars-source-badge",
+          text: s.custom ? "\u81EA\u5B9A\u4E49" : "\u5185\u7F6E"
+        });
+        const del = row.createEl("button", { cls: "fluxiars-source-del", text: "\u5220\u9664" });
+        del.addEventListener("click", async () => {
+          del.disabled = true;
+          del.setText("\u2026");
+          try {
+            const r = await this.plugin.api(
+              `/api/v1/sources?url=${encodeURIComponent(s.url)}`,
+              { method: "DELETE" }
+            );
+            if (r.status !== 200) throw new Error(`HTTP ${r.status}`);
+            await this.refreshSources(listEl);
+            new import_obsidian.Notice("\u6E90\u5DF2\u5220\u9664 \u2714");
+          } catch (e) {
+            del.disabled = false;
+            del.setText("\u5220\u9664");
+            new import_obsidian.Notice(`\u5220\u9664\u5931\u8D25\uFF1A${e.message}`);
+          }
+        });
+      }
+    } catch (e) {
+      listEl.empty();
+      listEl.createEl("p", {
+        cls: "fluxiars-source-muted",
+        text: `\u274C \u83B7\u53D6\u6E90\u5217\u8868\u5931\u8D25\uFF1A${e.message}`
+      });
+    }
   }
 };

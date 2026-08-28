@@ -48,3 +48,10 @@ class SourceInfo(BaseModel):
     name: str
     url: str
     topic: str
+    custom: bool = False  # True=用户自定义，False=内置默认
+
+
+class SourceIn(BaseModel):
+    url: str
+    name: str | None = None  # 留空则用域名
+    topic: str | None = None  # 留空则 "custom"

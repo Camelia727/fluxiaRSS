@@ -63,6 +63,15 @@ interface Digest {
   items: DigestItem[];
 }
 
+/** 服务端 /api/v1/sources 返回的一个 RSS 源 */
+interface SourceInfo {
+  name: string;
+  url: string;
+  topic: string;
+  /** true=用户自定义，false=内置默认 */
+  custom: boolean;
+}
+
 interface RatedAction {
   score: number | null;
   action: string;
@@ -508,5 +517,124 @@ class FluxiaSettingTab extends PluginSettingTab {
             await this.plugin.saveAll();
           })
       );
+
+    this.renderSourcesSection(containerEl);
+  }
+
+  // ---- RSS 源管理（服务端 DB 持久化） ----
+
+  private renderSourcesSection(containerEl: HTMLElement): void {
+    containerEl.createEl("h3", { text: "RSS 源" });
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text: "增删自定义 RSS 源（内置源也列于此）。改动后运行「立即采集并刷新」拉取新源。",
+    });
+
+    const bar = containerEl.createDiv({ cls: "fluxiars-source-bar" });
+    bar.createEl("button", { text: "🔄 刷新列表", cls: "fluxiars-source-refresh" })
+      .addEventListener("click", () => this.refreshSources(listEl));
+
+    const listEl = containerEl.createDiv({ cls: "fluxiars-source-list" });
+    listEl.createEl("p", { cls: "fluxiars-source-muted", text: "加载中…" });
+
+    const nameInput = containerEl.createEl("input", {
+      type: "text",
+      placeholder: "名称（可选，默认用域名）",
+      cls: "fluxiars-source-input",
+    });
+    const urlInput = containerEl.createEl("input", {
+      type: "text",
+      placeholder: "RSS URL（必填，如 https://example.com/feed.xml）",
+      cls: "fluxiars-source-input",
+    });
+    const addBtn = containerEl.createEl("button", {
+      text: "＋ 添加源",
+      cls: "fluxiars-source-addbtn",
+    });
+
+    urlInput.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") addBtn.click();
+    });
+    addBtn.addEventListener("click", async () => {
+      const url = urlInput.value.trim();
+      if (!url) {
+        new Notice("请先填写 RSS URL");
+        return;
+      }
+      addBtn.disabled = true;
+      addBtn.setText("添加中…");
+      try {
+        const res = await this.plugin.api("/api/v1/sources", {
+          method: "POST",
+          body: { url, name: nameInput.value.trim() || undefined },
+        });
+        if (res.status !== 200 && res.status !== 201) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        nameInput.value = "";
+        urlInput.value = "";
+        await this.refreshSources(listEl);
+        new Notice("源已添加 ✔");
+      } catch (e) {
+        new Notice(`添加失败：${(e as Error).message}`);
+      } finally {
+        addBtn.disabled = false;
+        addBtn.setText("＋ 添加源");
+      }
+    });
+
+    void this.refreshSources(listEl);
+  }
+
+  /** 拉取 /api/v1/sources 并渲染列表；失败时在列表位显示错误而非抛错。 */
+  private async refreshSources(listEl: HTMLElement): Promise<void> {
+    listEl.empty();
+    listEl.createEl("p", { cls: "fluxiars-source-muted", text: "加载中…" });
+    try {
+      const res = await this.plugin.api("/api/v1/sources");
+      if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
+      const sources = ((res.json as SourceInfo[]) ?? []);
+      listEl.empty();
+      if (sources.length === 0) {
+        listEl.createEl("p", { cls: "fluxiars-source-muted", text: "（暂无源，请添加）" });
+        return;
+      }
+      for (const s of sources) {
+        const row = listEl.createDiv({ cls: "fluxiars-source-row" });
+        const info = row.createDiv({ cls: "fluxiars-source-info" });
+        info.createEl("span", { cls: "fluxiars-source-name", text: s.name });
+        info.createEl("span", { cls: "fluxiars-source-url", text: s.url });
+        info.createEl("span", {
+          cls: s.custom
+            ? "fluxiars-source-badge fluxiars-source-badge-custom"
+            : "fluxiars-source-badge",
+          text: s.custom ? "自定义" : "内置",
+        });
+        const del = row.createEl("button", { cls: "fluxiars-source-del", text: "删除" });
+        del.addEventListener("click", async () => {
+          del.disabled = true;
+          del.setText("…");
+          try {
+            const r = await this.plugin.api(
+              `/api/v1/sources?url=${encodeURIComponent(s.url)}`,
+              { method: "DELETE" }
+            );
+            if (r.status !== 200) throw new Error(`HTTP ${r.status}`);
+            await this.refreshSources(listEl);
+            new Notice("源已删除 ✔");
+          } catch (e) {
+            del.disabled = false;
+            del.setText("删除");
+            new Notice(`删除失败：${(e as Error).message}`);
+          }
+        });
+      }
+    } catch (e) {
+      listEl.empty();
+      listEl.createEl("p", {
+        cls: "fluxiars-source-muted",
+        text: `❌ 获取源列表失败：${(e as Error).message}`,
+      });
+    }
   }
 }

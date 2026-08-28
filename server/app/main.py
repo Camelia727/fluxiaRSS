@@ -8,7 +8,15 @@ from datetime import date
 from fastapi import Depends, FastAPI, Header, HTTPException
 
 from . import config
-from .db import add_rating, get_article, init_db, list_articles
+from .db import (
+    add_rating,
+    add_source,
+    get_article,
+    init_db,
+    list_articles,
+    list_sources,
+    remove_source,
+)
 from .pipeline import run_pipeline
 from .ranking import rank_articles
 from . import honcho_client
@@ -20,6 +28,7 @@ from .schemas import (
     Profile,
     RatingIn,
     RatingOut,
+    SourceIn,
     SourceInfo,
 )
 
@@ -140,8 +149,35 @@ def get_profile() -> Profile:
 @app.get("/api/v1/sources", response_model=list[SourceInfo],
          dependencies=[Depends(require_token)])
 def get_sources() -> list[SourceInfo]:
+    """当前生效的 RSS 源列表（内置默认 + 用户自定义）。"""
+    init_db()
     return [
-        SourceInfo(name=f["name"], url=f["url"], topic=f["topic"])
-        for f in config.FEEDS
+        SourceInfo(
+            name=s["name"], url=s["url"], topic=s["topic"],
+            custom=bool(s["custom"]),
+        )
+        for s in list_sources()
     ]
+
+
+@app.post("/api/v1/sources", response_model=SourceInfo, status_code=201,
+          dependencies=[Depends(require_token)])
+def create_source(s: SourceIn) -> SourceInfo:
+    """新增/更新一个自定义 RSS 源（按 URL 幂等）。URL 非法返回 422。"""
+    init_db()
+    src = add_source(s.url, s.name, s.topic)
+    if src is None:
+        raise HTTPException(status_code=422, detail="invalid url")
+    return SourceInfo(
+        name=src["name"], url=src["url"], topic=src["topic"], custom=True
+    )
+
+
+@app.delete("/api/v1/sources", dependencies=[Depends(require_token)])
+def delete_source(url: str) -> dict:
+    """按 URL 删除一个 RSS 源（内置或自定义均可）。不存在返回 404。"""
+    init_db()
+    if not remove_source(url):
+        raise HTTPException(status_code=404, detail="source not found")
+    return {"ok": True, "url": url}
 

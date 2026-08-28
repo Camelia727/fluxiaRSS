@@ -35,8 +35,10 @@
 ## 设置
 
 - **API 地址**：fluxiaRSS 服务端，如 `http://192.168.1.5:8000`（默认 `http://localhost:8000`）
+- **API 令牌**：服务端 `.env` 的 `FLUXIARSS_API_TOKEN`（留空则本机免鉴权）
 - **digest 目录**：每日笔记目录（vault 内相对路径）
 - **自动生成时间**：过了该小时且今日笔记不存在时自动生成（每小时检查一次）
+- **RSS 源**：设置页可增删自定义源（名称可选，默认域名）；内置源带「内置」徽章、自定义源带「自定义」徽章，改动后跑「立即采集并刷新」生效，列表持久化在服务端
 
 ## 关键约束
 
@@ -58,3 +60,6 @@ npm run dev        # watch 模式
 - `GET {api}/api/v1/digest` → `{date, items:[{article_id, rank, title, summary, url, reason}]}`
 - `POST {api}/api/v1/rating` → body `{article_id, score?, comment?, action}`，`score` 0-10（可省略），`action ∈ read|skip|later|comment`；`action=comment` 时给该文章最近一条评分补评论
 - `POST {api}/api/v1/collect` → 触发采集，返回 `{fetched, new_added}`
+- `GET {api}/api/v1/sources` → `[{name, url, topic, custom}]`（内置+自定义）
+- `POST {api}/api/v1/sources` → body `{url, name?}`，新增/更新自定义源，返回该源
+- `DELETE {api}/api/v1/sources?url=<url>` → 删除一个源

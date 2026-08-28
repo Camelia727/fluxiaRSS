@@ -10,7 +10,7 @@ import feedparser
 import httpx
 
 from . import config
-from .db import get_article, preference_tokens, source_stats
+from .db import get_article, list_sources, preference_tokens, source_stats
 from .llm import summarize
 
 
@@ -49,7 +49,7 @@ def collect_candidates() -> list[dict]:
     stats = source_stats()
     cands: list[dict] = []
     with httpx.Client(follow_redirects=True, timeout=20) as client:
-        for feed in config.FEEDS:
+        for feed in list_sources():
             # 来源门控（硬）：低分源整轮跳过
             trust, n = stats.get(feed["name"], (None, 0))
             if (
