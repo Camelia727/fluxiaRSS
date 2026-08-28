@@ -96,6 +96,45 @@ def list_articles(limit: int) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def get_latest_ratings(article_ids: list[str]) -> dict[str, dict]:
+    """返回每篇文章「最近一次评分」+「最近一条非空评论」。
+
+    - score/action 取最近一次真正的动作（read/later/skip）；纯评论行（action=
+      comment、score 为空）不作为主状态，避免插件渲染成「已评 null/10」。
+    - comment 单独取该文章最近一条非空评论（评论只增不改，与最新动作可能不同行，
+      合并返回让跨端能看到用户写的批注）。
+    - 无评分的文章不在结果中。
+    """
+    if not article_ids:
+        return {}
+    q = ",".join("?" * len(article_ids))
+    with _conn() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT r.article_id, r.score, r.action,
+                   (SELECT c.comment FROM ratings c
+                    WHERE c.article_id = r.article_id AND c.comment IS NOT NULL
+                    ORDER BY c.time DESC LIMIT 1) AS comment
+            FROM ratings r
+            WHERE r.article_id IN ({q})
+              AND r.action IN ('read', 'later', 'skip')
+              AND r.time = (
+                  SELECT MAX(t.time) FROM ratings t
+                  WHERE t.article_id = r.article_id AND t.action IN ('read', 'later', 'skip')
+              )
+            """,
+            article_ids,
+        ).fetchall()
+    return {
+        r["article_id"]: {
+            "score": r["score"],
+            "action": r["action"] or "read",
+            "comment": r["comment"],
+        }
+        for r in rows
+    }
+
+
 def _hash(url: str) -> str:
     """与 collector 一致的 URL 指纹，用作 sources 主键。"""
     return hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]

@@ -251,6 +251,7 @@ var DigestRenderer = class {
       });
       return;
     }
+    this.mergeServerRatings();
     const header = el.createDiv({ cls: "fluxiars-header" });
     const gen = this.digest.generated ? new Date(this.digest.generated).toTimeString().slice(0, 5) : "\u2014";
     header.createEl("span", {
@@ -259,6 +260,24 @@ var DigestRenderer = class {
     for (const item of this.digest.items) {
       this.renderItem(el, item);
     }
+  }
+  /**
+   * 把服务端返回的最近一次评分合并进本地 ratings：本库已评过则以本地为准
+   * （更新鲜），未评过的标记为「已评」，实现跨库/跨端状态同步。
+   */
+  mergeServerRatings() {
+    var _a, _b;
+    for (const item of this.digest.items) {
+      const rated = item.rated;
+      if (!rated) continue;
+      if (this.plugin.ratings[item.article_id]) continue;
+      this.plugin.ratings[item.article_id] = {
+        score: (_a = rated.score) != null ? _a : null,
+        action: rated.action,
+        comment: (_b = rated.comment) != null ? _b : void 0
+      };
+    }
+    void this.plugin.saveAll();
   }
   renderItem(el, item) {
     const card = el.createDiv({ cls: "fluxiars-card" });

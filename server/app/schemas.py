@@ -5,6 +5,13 @@ from datetime import date
 from pydantic import BaseModel
 
 
+class RatedInfo(BaseModel):
+    """当前用户对某篇文章最近一次的评分（未评过则为 None）。"""
+    score: int | None = None  # 打分 0-10；稍后读/跳过为 None
+    action: str = "read"  # read | skip | later | comment
+    comment: str | None = None
+
+
 class DigestItem(BaseModel):
     article_id: str
     rank: int
@@ -13,6 +20,7 @@ class DigestItem(BaseModel):
     url: str
     reason: str
     source: str = ""  # 来源（RSS 源名）；老数据可能缺失，默认空串
+    rated: RatedInfo | None = None  # 跨库/跨端同步：该文章最近一次评分
 
 
 class Digest(BaseModel):

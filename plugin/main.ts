@@ -48,6 +48,13 @@ interface PluginData {
   ratings: Record<string, RatedState>;
 }
 
+/** 服务端返回的最近一次评分（跨库/跨端同步用） */
+interface RatedInfo {
+  score: number | null;
+  action: string;
+  comment?: string | null;
+}
+
 interface DigestItem {
   article_id: string;
   rank: number;
@@ -57,6 +64,8 @@ interface DigestItem {
   reason: string;
   /** 来源（RSS 源名）；老数据可能缺失 */
   source?: string;
+  /** 当前用户最近一次评分；未评过则缺省 */
+  rated?: RatedInfo | null;
 }
 
 interface Digest {
@@ -351,6 +360,8 @@ class DigestRenderer {
       return;
     }
 
+    this.mergeServerRatings();
+
     const header = el.createDiv({ cls: "fluxiars-header" });
     const gen = this.digest.generated
       ? new Date(this.digest.generated).toTimeString().slice(0, 5)
@@ -362,6 +373,24 @@ class DigestRenderer {
     for (const item of this.digest.items) {
       this.renderItem(el, item);
     }
+  }
+
+  /**
+   * 把服务端返回的最近一次评分合并进本地 ratings：本库已评过则以本地为准
+   * （更新鲜），未评过的标记为「已评」，实现跨库/跨端状态同步。
+   */
+  private mergeServerRatings(): void {
+    for (const item of this.digest.items) {
+      const rated = item.rated;
+      if (!rated) continue;
+      if (this.plugin.ratings[item.article_id]) continue; // 本地优先
+      this.plugin.ratings[item.article_id] = {
+        score: rated.score ?? null,
+        action: rated.action,
+        comment: rated.comment ?? undefined,
+      };
+    }
+    void this.plugin.saveAll();
   }
 
   private renderItem(el: HTMLElement, item: DigestItem): void {

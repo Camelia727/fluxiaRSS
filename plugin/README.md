@@ -58,7 +58,7 @@ npm run dev        # watch 模式
 ## 与后端契约
 
 - 鉴权：服务端配置了 `FLUXIARSS_API_TOKEN` 时，所有请求带 `X-Fluxia-Token` 头；插件设置里填入同一令牌
-- `GET {api}/api/v1/digest?top=N` → `{date, items:[{article_id, rank, title, summary, url, reason, source}]}`，`top` 缺省用服务端 `DIGEST_SIZE`（钳制 1-50）
+- `GET {api}/api/v1/digest?top=N` → `{date, items:[{article_id, rank, title, summary, url, reason, source, rated?}]}`，`top` 缺省用服务端 `DIGEST_SIZE`（钳制 1-50）；`rated` 为当前用户最近一次评分 `{score, action, comment?}`，未评过则缺省——插件据此跨库/跨端显示「已评」并避免重复评分
 - `POST {api}/api/v1/rating` → body `{article_id, score?, comment?, action}`，`score` 0-10（可省略），`action ∈ read|skip|later|comment`；`action=comment` 时给该文章最近一条评分补评论
 - `POST {api}/api/v1/collect` → 触发采集，返回 `{fetched, new_added}`
 - `GET {api}/api/v1/sources` → `[{name, url, topic, custom}]`（内置+自定义）

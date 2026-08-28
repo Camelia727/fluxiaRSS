@@ -12,6 +12,7 @@ from .db import (
     add_rating,
     add_source,
     get_article,
+    get_latest_ratings,
     init_db,
     list_articles,
     list_sources,
@@ -26,6 +27,7 @@ from .schemas import (
     Digest,
     DigestItem,
     Profile,
+    RatedInfo,
     RatingIn,
     RatingOut,
     SourceIn,
@@ -82,6 +84,8 @@ def get_digest(d: date | None = None, top: int | None = None) -> Digest:
     # top_n 显式传 k：rank_articles 内部按 DEFAULT_DIGEST_SIZE 预截断，
     # 不传的话 ?top=20 也拿不到默认 15 条以外的文章。
     ranked = rank_articles(list_articles(RANK_POOL), top_n=k)[:k]
+    # 跨端同步：取每篇文章最近一次评分，插件据此显示「已评」并避免重复评分
+    latest = get_latest_ratings([r["id"] for r in ranked]) if ranked else {}
     items = [
         DigestItem(
             article_id=r["id"],
@@ -91,6 +95,7 @@ def get_digest(d: date | None = None, top: int | None = None) -> Digest:
             url=r["url"],
             reason=r["reason"],
             source=r["source"] or "",
+            rated=RatedInfo(**latest[r["id"]]) if r["id"] in latest else None,
         )
         for i, r in enumerate(ranked)
     ]
