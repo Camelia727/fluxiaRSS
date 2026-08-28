@@ -43,6 +43,8 @@ FEEDS = [
 PER_FEED_CAP = int(os.getenv("PER_FEED_CAP", "20"))
 # 采集扫描上限：单源单轮最多评估的 entry 数（需大于 PER_FEED_CAP 才能做偏好挑选）
 PER_FEED_SCAN_CAP = int(os.getenv("PER_FEED_SCAN_CAP", "100"))
+# 采集时效：按发布时间超过该天数的旧文直接跳过（防 RSS 源回吐历史文章）
+MAX_AGE_DAYS = int(os.getenv("MAX_AGE_DAYS", "2"))
 
 # 评分参与采集筛选（混合力度）：
 # - 来源门控：均分 < SOURCE_MIN_TRUST 且评分 >= SOURCE_MIN_RATINGS 条的源，整轮跳过
@@ -69,6 +71,7 @@ HONCHO_BASE_URL = os.getenv("HONCHO_BASE_URL", "http://localhost:8001")
 HONCHO_WORKSPACE_ID = os.getenv("HONCHO_WORKSPACE_ID", "")
 HONCHO_PEER_ID = os.getenv("HONCHO_PEER_ID", "user")
 HONCHO_SESSION_ID = os.getenv("HONCHO_SESSION_ID", "reading")
+
 
 
 

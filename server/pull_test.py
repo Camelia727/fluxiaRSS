@@ -7,7 +7,7 @@ import httpx
 import feedparser
 
 from app import config
-from app.collector import _hash, _relevant
+from app.collector import _entry_age_days, _hash, _relevant
 from app.db import get_article, init_db
 
 
@@ -29,6 +29,9 @@ def main() -> None:
                         or ""
                     )
                     link = getattr(entry, "link", "") or ""
+                    age = _entry_age_days(entry)
+                    if age is not None and age > config.MAX_AGE_DAYS:
+                        continue
                     if not _relevant(title, desc):
                         continue
                     rel += 1

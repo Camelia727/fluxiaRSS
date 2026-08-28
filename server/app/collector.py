@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import hashlib
+import calendar
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 
 import feedparser
 import httpx
@@ -19,6 +21,19 @@ def _hash(url: str) -> str:
 def _relevant(title: str, desc: str) -> bool:
     text = f"{title} {desc}".lower()
     return any(kw in text for kw in config.KEYWORDS)
+
+
+def _entry_age_days(entry) -> float | None:
+    """条目发布距今的天数；无时间字段返回 None（放行，不误杀无日期条目）。"""
+    ts = getattr(entry, "published_parsed", None) or getattr(
+        entry, "updated_parsed", None
+    )
+    if ts is None:
+        return None
+    try:
+        return (datetime.now(timezone.utc).timestamp() - calendar.timegm(ts)) / 86400.0
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def collect_candidates() -> list[dict]:
@@ -62,6 +77,9 @@ def collect_candidates() -> list[dict]:
                     )
                     link = getattr(entry, "link", "") or ""
                     if not link or not title:
+                        continue
+                    age = _entry_age_days(entry)
+                    if age is not None and age > config.MAX_AGE_DAYS:
                         continue
                     if not _relevant(title, desc):
                         continue
