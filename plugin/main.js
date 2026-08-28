@@ -28,6 +28,7 @@ var DEFAULT_SETTINGS = {
   apiBase: "http://localhost:8000",
   apiToken: "",
   digestDir: "FluxiaRSS",
+  digestSize: 8,
   autoRefreshHour: 6
 };
 var RATED_ACTIONS = [
@@ -138,7 +139,7 @@ var FluxiaRSSPlugin = class extends import_obsidian.Plugin {
     return this.app.vault.adapter.exists(this.getTodayPath());
   }
   async fetchDigest() {
-    const res = await this.api("/api/v1/digest");
+    const res = await this.api(`/api/v1/digest?top=${this.settings.digestSize}`);
     if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
     return res.json;
   }
@@ -367,6 +368,12 @@ var FluxiaSettingTab = class extends import_obsidian.PluginSettingTab {
     new import_obsidian.Setting(containerEl).setName("digest \u76EE\u5F55").setDesc("\u6BCF\u65E5\u7B14\u8BB0\u5B58\u653E\u76EE\u5F55\uFF08vault \u5185\u76F8\u5BF9\u8DEF\u5F84\uFF09").addText(
       (t) => t.setValue(this.plugin.settings.digestDir).onChange(async (v) => {
         this.plugin.settings.digestDir = v.trim() || DEFAULT_SETTINGS.digestDir;
+        await this.plugin.saveAll();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("\u6BCF\u65E5\u7BC7\u6570\uFF08Top-K\uFF09").setDesc("\u6BCF\u65E5\u667A\u8BFB\u7CBE\u9009\u7684\u6761\u6570\uFF08\u62C9\u53D6 digest \u65F6\u4F20\u7ED9\u670D\u52A1\u7AEF ?top=\uFF09").addSlider(
+      (s) => s.setLimits(1, 30, 1).setValue(this.plugin.settings.digestSize).setDynamicTooltip().onChange(async (v) => {
+        this.plugin.settings.digestSize = v;
         await this.plugin.saveAll();
       })
     );

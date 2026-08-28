@@ -29,6 +29,8 @@ interface FluxiaSettings {
   apiToken: string;
   /** 每日笔记目录（vault 内相对路径） */
   digestDir: string;
+  /** 每日筛选 Top-K 的 K 值（digest 篇数） */
+  digestSize: number;
   /** 过了该小时且今日笔记不存在时自动生成（0-23） */
   autoRefreshHour: number;
 }
@@ -82,6 +84,7 @@ const DEFAULT_SETTINGS: FluxiaSettings = {
   apiBase: "http://localhost:8000",
   apiToken: "",
   digestDir: "FluxiaRSS",
+  digestSize: 8,
   autoRefreshHour: 6,
 };
 
@@ -220,7 +223,7 @@ export default class FluxiaRSSPlugin extends Plugin {
   }
 
   async fetchDigest(): Promise<Digest> {
-    const res = await this.api("/api/v1/digest");
+    const res = await this.api(`/api/v1/digest?top=${this.settings.digestSize}`);
     if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
     return res.json as Digest;
   }
@@ -500,6 +503,20 @@ class FluxiaSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.digestDir)
           .onChange(async (v) => {
             this.plugin.settings.digestDir = v.trim() || DEFAULT_SETTINGS.digestDir;
+            await this.plugin.saveAll();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("每日篇数（Top-K）")
+      .setDesc("每日智读精选的条数（拉取 digest 时传给服务端 ?top=）")
+      .addSlider((s) =>
+        s
+          .setLimits(1, 30, 1)
+          .setValue(this.plugin.settings.digestSize)
+          .setDynamicTooltip()
+          .onChange(async (v) => {
+            this.plugin.settings.digestSize = v;
             await this.plugin.saveAll();
           })
       );

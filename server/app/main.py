@@ -71,10 +71,17 @@ def collect() -> dict:
 
 @app.get("/api/v1/digest", response_model=Digest,
          dependencies=[Depends(require_token)])
-def get_digest(d: date | None = None) -> Digest:
-    """从候选池中按偏好排序，返回 Top N。"""
+def get_digest(d: date | None = None, top: int | None = None) -> Digest:
+    """从候选池中按偏好排序，返回 Top K。
+
+    K 由 `?top=` 指定（钳制到 1-50），缺省用配置项 DIGEST_SIZE。
+    """
     init_db()
-    ranked = rank_articles(list_articles(RANK_POOL))
+    k = top if top is not None else config.DEFAULT_DIGEST_SIZE
+    k = max(1, min(k, 50))
+    # top_n 显式传 k：rank_articles 内部按 DEFAULT_DIGEST_SIZE 预截断，
+    # 不传的话 ?top=20 也拿不到默认 15 条以外的文章。
+    ranked = rank_articles(list_articles(RANK_POOL), top_n=k)[:k]
     items = [
         DigestItem(
             article_id=r["id"],
