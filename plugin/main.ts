@@ -144,7 +144,7 @@ export default class FluxiaRSSPlugin extends Plugin {
 
     this.registerMarkdownCodeBlockProcessor(
       "fluxiars",
-      (source, el) => {
+      (source, el, ctx) => {
         let digest: Digest;
         try {
           digest = JSON.parse(source);
@@ -152,7 +152,7 @@ export default class FluxiaRSSPlugin extends Plugin {
           el.createEl("p", { text: "❌ digest 数据解析失败，请用「刷新今日智读」重试。" });
           return;
         }
-        new DigestRenderer(this, digest).renderInto(el);
+        new DigestRenderer(this, digest, ctx.sourcePath).renderInto(el);
       }
     );
 
@@ -347,11 +347,19 @@ export default class FluxiaRSSPlugin extends Plugin {
 // ---- 渲染 ----
 
 class DigestRenderer {
-  constructor(private plugin: FluxiaRSSPlugin, private digest: Digest) {}
+  private rootEl: HTMLElement | null = null;
+
+  constructor(
+    private plugin: FluxiaRSSPlugin,
+    private digest: Digest,
+    /** 当前笔记路径：刷新后把最新 digest JSON 写回其 fluxiars 代码块 */
+    private sourcePath: string
+  ) {}
 
   renderInto(el: HTMLElement): void {
     el.addClass("fluxiars-digest");
     el.empty();
+    this.rootEl = el;
 
     if (!this.digest.items || this.digest.items.length === 0) {
       el.createEl("p", {
@@ -370,8 +378,55 @@ class DigestRenderer {
       text: `📰 ${this.digest.date} · ${this.digest.items.length} 篇 · 生成 ${gen}`,
     });
 
+    // 显示刷新：重拉当日状态（rank/评分/评论），跨端手动同步入口
+    const refreshBtn = header.createEl("button", {
+      cls: "fluxiars-refresh",
+      text: "🔄 刷新",
+    });
+    refreshBtn.addEventListener("click", () => void this.onRefresh(refreshBtn));
+
     for (const item of this.digest.items) {
       this.renderItem(el, item);
+    }
+  }
+
+  /**
+   * 手动刷新：从服务端重拉 digest（rank/reason/rated/comment 全量刷新），
+   * 就地重渲染，并把最新 JSON 写回当前笔记的 fluxiars 代码块（只替换该块）。
+   */
+  private async onRefresh(btn: HTMLButtonElement): Promise<void> {
+    btn.disabled = true;
+    btn.setText("刷新中…");
+    try {
+      const fresh = await this.plugin.fetchDigest();
+      fresh.generated = new Date().toISOString();
+      this.digest = fresh;
+      if (this.rootEl) this.renderInto(this.rootEl);
+      await this.persistToNote();
+      new Notice("已刷新状态 ✔");
+    } catch (e) {
+      new Notice(`刷新失败：${(e as Error).message}`);
+    } finally {
+      btn.disabled = false;
+      btn.setText("🔄 刷新");
+    }
+  }
+
+  /** 把当前 digest JSON 写回笔记的 fluxiars 代码块；不触碰其他内容。 */
+  private async persistToNote(): Promise<void> {
+    try {
+      const file = this.plugin.app.vault.getAbstractFileByPath(this.sourcePath);
+      if (!(file instanceof TFile)) return;
+      const json = JSON.stringify(this.digest);
+      await this.plugin.app.vault.process(file, (raw) => {
+        const updated = raw.replace(
+          /```fluxiars\n[\s\S]*?\n```/,
+          () => `\`\`\`fluxiars\n${json}\n\`\`\``
+        );
+        return updated === raw ? raw : updated;
+      });
+    } catch (e) {
+      new Notice(`状态落盘失败（不影响显示）：${(e as Error).message}`);
     }
   }
 

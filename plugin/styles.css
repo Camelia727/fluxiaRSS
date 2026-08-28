@@ -12,6 +12,20 @@
   padding-bottom: 6px;
 }
 
+.fluxiars-refresh {
+  font-size: 0.8em;
+  padding: 1px 10px;
+  margin-left: 8px;
+  cursor: pointer;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+.fluxiars-refresh:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .fluxiars-card {
   border: 1px solid var(--background-modifier-border);
   border-radius: 8px;

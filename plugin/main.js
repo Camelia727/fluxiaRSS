@@ -68,7 +68,7 @@ var FluxiaRSSPlugin = class extends import_obsidian.Plugin {
     await this.loadSettings();
     this.registerMarkdownCodeBlockProcessor(
       "fluxiars",
-      (source, el) => {
+      (source, el, ctx) => {
         let digest;
         try {
           digest = JSON.parse(source);
@@ -76,7 +76,7 @@ var FluxiaRSSPlugin = class extends import_obsidian.Plugin {
           el.createEl("p", { text: "\u274C digest \u6570\u636E\u89E3\u6790\u5931\u8D25\uFF0C\u8BF7\u7528\u300C\u5237\u65B0\u4ECA\u65E5\u667A\u8BFB\u300D\u91CD\u8BD5\u3002" });
           return;
         }
-        new DigestRenderer(this, digest).renderInto(el);
+        new DigestRenderer(this, digest, ctx.sourcePath).renderInto(el);
       }
     );
     this.addCommand({
@@ -238,13 +238,16 @@ var FluxiaRSSPlugin = class extends import_obsidian.Plugin {
   }
 };
 var DigestRenderer = class {
-  constructor(plugin, digest) {
+  constructor(plugin, digest, sourcePath) {
     this.plugin = plugin;
     this.digest = digest;
+    this.sourcePath = sourcePath;
+    this.rootEl = null;
   }
   renderInto(el) {
     el.addClass("fluxiars-digest");
     el.empty();
+    this.rootEl = el;
     if (!this.digest.items || this.digest.items.length === 0) {
       el.createEl("p", {
         text: "\u4ECA\u65E5\u6682\u65E0\u5185\u5BB9\uFF08\u670D\u52A1\u7AEF\u51CC\u6668\u91C7\u96C6\u540E\u5237\u65B0\u5373\u53EF\uFF09\u3002"
@@ -257,8 +260,53 @@ var DigestRenderer = class {
     header.createEl("span", {
       text: `\u{1F4F0} ${this.digest.date} \xB7 ${this.digest.items.length} \u7BC7 \xB7 \u751F\u6210 ${gen}`
     });
+    const refreshBtn = header.createEl("button", {
+      cls: "fluxiars-refresh",
+      text: "\u{1F504} \u5237\u65B0"
+    });
+    refreshBtn.addEventListener("click", () => void this.onRefresh(refreshBtn));
     for (const item of this.digest.items) {
       this.renderItem(el, item);
+    }
+  }
+  /**
+   * 手动刷新：从服务端重拉 digest（rank/reason/rated/comment 全量刷新），
+   * 就地重渲染，并把最新 JSON 写回当前笔记的 fluxiars 代码块（只替换该块）。
+   */
+  async onRefresh(btn) {
+    btn.disabled = true;
+    btn.setText("\u5237\u65B0\u4E2D\u2026");
+    try {
+      const fresh = await this.plugin.fetchDigest();
+      fresh.generated = (/* @__PURE__ */ new Date()).toISOString();
+      this.digest = fresh;
+      if (this.rootEl) this.renderInto(this.rootEl);
+      await this.persistToNote();
+      new import_obsidian.Notice("\u5DF2\u5237\u65B0\u72B6\u6001 \u2714");
+    } catch (e) {
+      new import_obsidian.Notice(`\u5237\u65B0\u5931\u8D25\uFF1A${e.message}`);
+    } finally {
+      btn.disabled = false;
+      btn.setText("\u{1F504} \u5237\u65B0");
+    }
+  }
+  /** 把当前 digest JSON 写回笔记的 fluxiars 代码块；不触碰其他内容。 */
+  async persistToNote() {
+    try {
+      const file = this.plugin.app.vault.getAbstractFileByPath(this.sourcePath);
+      if (!(file instanceof import_obsidian.TFile)) return;
+      const json = JSON.stringify(this.digest);
+      await this.plugin.app.vault.process(file, (raw) => {
+        const updated = raw.replace(
+          /```fluxiars\n[\s\S]*?\n```/,
+          () => `\`\`\`fluxiars
+${json}
+\`\`\``
+        );
+        return updated === raw ? raw : updated;
+      });
+    } catch (e) {
+      new import_obsidian.Notice(`\u72B6\u6001\u843D\u76D8\u5931\u8D25\uFF08\u4E0D\u5F71\u54CD\u663E\u793A\uFF09\uFF1A${e.message}`);
     }
   }
   /**
