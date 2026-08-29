@@ -48,6 +48,24 @@ app = FastAPI(title="fluxiaRSS API", version="0.2.0", lifespan=lifespan)
 RANK_POOL = 100
 
 
+def _apply_source_cap(ranked: list[dict], cap: int) -> list[dict]:
+    """按来源配额过滤排名列表：每源最多保留前 cap 篇，保持原有排序。
+
+    防止单源（如 arXiv）因量大而霸屏 Top-K；cap<=0 表示不限制。
+    """
+    if cap <= 0:
+        return ranked
+    seen: dict[str, int] = {}
+    out: list[dict] = []
+    for r in ranked:
+        src = r.get("source") or "?"
+        if seen.get(src, 0) >= cap:
+            continue
+        seen[src] = seen.get(src, 0) + 1
+        out.append(r)
+    return out
+
+
 def require_token(x_fluxia_token: str | None = Header(default=None)) -> None:
     """轻量鉴权：配置了 FLUXIARSS_API_TOKEN 时，校验 X-Fluxia-Token 头。"""
     if config.FLUXIARSS_API_TOKEN and x_fluxia_token != config.FLUXIARSS_API_TOKEN:
@@ -85,9 +103,11 @@ def get_digest(d: date | None = None, top: int | None = None) -> Digest:
     # 评分/信任只在今日新文内决定排序；空池（当日尚未采集）回退全池保证非空。
     since = (datetime.now(timezone.utc) - timedelta(hours=config.FRESH_WINDOW_HOURS)).isoformat()
     pool = list_articles(RANK_POOL, since=since) or list_articles(RANK_POOL)
-    # top_n 显式传 k：rank_articles 内部按 DEFAULT_DIGEST_SIZE 预截断，
-    # 不传的话 ?top=20 也拿不到默认 15 条以外的文章。
-    ranked = rank_articles(pool, top_n=k)[:k]
+    # 先排全量候选（top_n 传 len(pool) 而非 k：rank_articles 内部按
+    # DEFAULT_DIGEST_SIZE 预截断，传小值会导致配额无法从更靠后的来源补位），
+    # 再按来源配额去重防霸屏，最后取 Top K。
+    ranked_all = rank_articles(pool, top_n=len(pool) or 1)
+    ranked = _apply_source_cap(ranked_all, config.DIGEST_MAX_PER_SOURCE)[:k]
     # 跨端同步：取每篇文章最近一次评分，插件据此显示「已评」并避免重复评分
     latest = get_latest_ratings([r["id"] for r in ranked]) if ranked else {}
     items = [

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import calendar
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
@@ -19,8 +20,19 @@ def _hash(url: str) -> str:
 
 
 def _relevant(title: str, desc: str) -> bool:
-    text = f"{title} {desc}".lower()
-    return any(kw in text for kw in config.KEYWORDS)
+    """关键词相关性：英文词整词匹配（兼容 agents/llms 等词尾），中文子串匹配。
+
+    大小写不敏感；英文用词边界避免 "ai" 误命中 said/available 等普通词。
+    """
+    low = f"{title} {desc}".lower()
+    for kw in config.KEYWORDS:
+        k = kw.lower()
+        if k.isascii():
+            if re.search(rf"\b{re.escape(k)}\w*", low):
+                return True
+        elif k in low:
+            return True
+    return False
 
 
 def _entry_age_days(entry) -> float | None:
@@ -48,7 +60,11 @@ def collect_candidates() -> list[dict]:
     pos, neg = preference_tokens()
     stats = source_stats()
     cands: list[dict] = []
-    with httpx.Client(follow_redirects=True, timeout=20) as client:
+    with httpx.Client(
+        follow_redirects=True,
+        timeout=20,
+        headers={"User-Agent": config.FEED_USER_AGENT},
+    ) as client:
         for feed in list_sources():
             # 来源门控（硬）：低分源整轮跳过
             trust, n = stats.get(feed["name"], (None, 0))

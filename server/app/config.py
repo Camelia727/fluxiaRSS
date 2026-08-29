@@ -24,7 +24,32 @@ EXPLORATION_BUDGET = float(os.getenv("EXPLORATION_BUDGET", "0.15"))
 DB_PATH = os.getenv("FLUXIARSS_DB", "fluxiars.db")
 
 # 话题与源（可在本地/部署时按需调整）
-KEYWORDS = ["agent", "ai agent", "agent framework", "llm agent", "model release", "agents"]
+# 采集相关性关键词（标题/摘要命其一即放行）。中英混排：
+# - agent 系保持窄口径（用户主兴趣）
+# - 更宽的 AI 词让 arXiv 之外的英文源（如 The Verge）能进池
+# - 中文词让中文源（量子位/阮一峰）能进池
+# 匹配规则见 collector._relevant：英文词整词匹配（兼容 agents/llms 词尾），
+# 中文子串匹配，大小写不敏感；"ai" 用整词匹配所以不会误命中 said/available。
+KEYWORDS = [
+    "agent", "ai agent", "agent framework", "llm agent", "model release",
+    # 更宽的英文 AI 词
+    "llm", "gpt", "openai", "chatgpt", "ai", "artificial intelligence",
+    "machine learning", "deep learning", "neural network",
+    "large language model", "generative",
+    # 中文 AI 词
+    "大模型", "人工智能", "智能体", "提示词", "模型",
+]
+
+# 采集请求的 User-Agent：部分 RSS 源（如 qbitai）会拦截默认 UA
+FEED_USER_AGENT = os.getenv(
+    "FEED_USER_AGENT",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+)
+
+# digest 每源配额：排名后每源最多保留这么多篇，防止单源（如 arXiv）霸屏 Top-K；
+# 0 表示不限制
+DIGEST_MAX_PER_SOURCE = int(os.getenv("DIGEST_MAX_PER_SOURCE", "3"))
 
 # API 轻量鉴权：设置了该令牌时，/api/v1/* 请求需带 X-Fluxia-Token 头；
 # 为空则不做校验（本地调试）。/health 始终公开，用于连通性探测。
