@@ -51,6 +51,11 @@ FEED_USER_AGENT = os.getenv(
 # 0 表示不限制
 DIGEST_MAX_PER_SOURCE = int(os.getenv("DIGEST_MAX_PER_SOURCE", "3"))
 
+# 「研究前沿」类文章在 digest 里的硬上限：分类为 RESEARCH_CATEGORY 的文章
+# 最多保留这么多篇，其余位置由实践/概念等文章填充（Obsidian 端可再调 TOPN）。
+RESEARCH_CATEGORY = "research"
+RESEARCH_MAX_IN_DIGEST = int(os.getenv("RESEARCH_MAX_IN_DIGEST", "2"))
+
 # API 轻量鉴权：设置了该令牌时，/api/v1/* 请求需带 X-Fluxia-Token 头；
 # 为空则不做校验（本地调试）。/health 始终公开，用于连通性探测。
 FLUXIARSS_API_TOKEN = os.getenv("FLUXIARSS_API_TOKEN", "")
@@ -59,8 +64,6 @@ FEEDS = [
     {"name": "Simon Willison", "url": "https://simonwillison.net/atom/everything/", "topic": "agent"},
     {"name": "Latent Space", "url": "https://www.latent.space/feed", "topic": "agent"},
     {"name": "Lilian Weng", "url": "https://lilianweng.github.io/index.xml", "topic": "agent"},
-    {"name": "arXiv cs.AI", "url": "https://export.arxiv.org/rss/cs.AI", "topic": "agent"},
-    {"name": "arXiv cs.LG", "url": "https://export.arxiv.org/rss/cs.LG", "topic": "agent"},
     {"name": "Ben's Bites", "url": "https://www.bensbites.com/feed.xml", "topic": "agent"},
     {"name": "VentureBeat AI", "url": "https://venturebeat.com/category/ai/feed/", "topic": "agent"},
     {"name": "The Verge", "url": "https://www.theverge.com/rss/index.xml", "topic": "agent"},

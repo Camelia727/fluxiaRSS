@@ -11,6 +11,7 @@ import feedparser
 import httpx
 
 from . import config
+from .classify import classify
 from .db import get_article, list_sources, preference_tokens, source_stats
 from .llm import summarize
 
@@ -148,6 +149,8 @@ def _pick_by_preference(feed_cands: list[dict],
 def _summarize_parallel(cands: list[dict], workers: int) -> list[dict]:
     def work(item: dict) -> dict:
         item["summary"] = summarize(item["title"], item["desc"])
+        # 简单规则分类（research/practical/news/other），随文章入库
+        item["category"] = classify(item["title"], item["desc"], item["source"])
         return item
 
     done: list[dict] = []

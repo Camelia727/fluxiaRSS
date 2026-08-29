@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from . import config
+from .classify import classify
 
 
 def _conn() -> sqlite3.Connection:
@@ -56,6 +57,10 @@ def init_db() -> None:
             )
             """
         )
+        # 幂等迁移：老库 articles 表没有 category 列，补上
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(articles)")}
+        if "category" not in cols:
+            conn.execute("ALTER TABLE articles ADD COLUMN category TEXT")
         # 首次初始化时用 config.FEEDS 播种内置源；非空表不重复播种（用户删除的
         # 内置源不会因重启复活）
         row = conn.execute("SELECT COUNT(*) AS n FROM sources").fetchone()
@@ -67,6 +72,53 @@ def init_db() -> None:
                     "VALUES (?, ?, ?, ?, 0, ?)",
                     (_hash(f["url"]), f["url"], f["name"], f["topic"], now),
                 )
+    # 内置源与 config.FEEDS 对齐（移除已删源的旧文章）+ 存量文章分类回填
+    sync_builtin_sources()
+    backfill_categories()
+
+
+def sync_builtin_sources() -> None:
+    """内置源与 config.FEEDS 对齐（幂等）。
+
+    - custom=0 且 URL 仍在配置中 → 用配置更新 topic/name（config 权威）
+    - custom=0 且已从配置移除 → 删除该源行及其名下文章（如移除 arXiv 后清掉存量）
+    - 不重新插入配置里的新内置源，用户删过的内置源不会因重启复活
+    """
+    with _conn() as conn:
+        feeds = {f["url"]: f for f in config.FEEDS}
+        rows = conn.execute(
+            "SELECT url, name, custom FROM sources"
+        ).fetchall()
+        removed_names: list[str] = []
+        for row in rows:
+            if row["custom"]:
+                continue
+            feed = feeds.get(row["url"])
+            if feed:
+                conn.execute(
+                    "UPDATE sources SET topic=?, name=? WHERE url=? AND custom=0",
+                    (feed["topic"], feed["name"], row["url"]),
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM sources WHERE url=? AND custom=0", (row["url"],)
+                )
+                removed_names.append(row["name"])
+        for name in removed_names:
+            conn.execute("DELETE FROM articles WHERE source=?", (name,))
+
+
+def backfill_categories() -> None:
+    """为尚未分类的文章按规则回填 category（幂等，覆盖老数据）。"""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT id, title, summary, source FROM articles WHERE category IS NULL"
+        ).fetchall()
+        for r in rows:
+            cat = classify(r["title"] or "", r["summary"] or "", r["source"] or "")
+            conn.execute(
+                "UPDATE articles SET category=? WHERE id=?", (cat, r["id"])
+            )
 
 
 def get_article(aid: str) -> dict | None:
@@ -75,15 +127,17 @@ def get_article(aid: str) -> dict | None:
         return dict(row) if row else None
 
 
-def insert_article(aid: str, url: str, title: str, source: str, summary: str) -> bool:
-    """插入新文章；若已存在返回 False。"""
+def insert_article(aid: str, url: str, title: str, source: str, summary: str,
+                   category: str | None = None) -> bool:
+    """插入新文章；若已存在返回 False。category 为 research/practical/news/other。"""
     if get_article(aid):
         return False
     with _conn() as conn:
         conn.execute(
-            "INSERT INTO articles (id, url, title, source, summary, fetched_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (aid, url, title, source, summary, datetime.now(timezone.utc).isoformat()),
+            "INSERT INTO articles (id, url, title, source, summary, category, fetched_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (aid, url, title, source, summary, category,
+             datetime.now(timezone.utc).isoformat()),
         )
     return True
 

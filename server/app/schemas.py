@@ -20,6 +20,7 @@ class DigestItem(BaseModel):
     url: str
     reason: str
     source: str = ""  # 来源（RSS 源名）；老数据可能缺失，默认空串
+    category: str = "other"  # research/practical/news/other；老数据可能缺失
     rated: RatedInfo | None = None  # 跨库/跨端同步：该文章最近一次评分
 
 

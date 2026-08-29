@@ -66,6 +66,24 @@ def _apply_source_cap(ranked: list[dict], cap: int) -> list[dict]:
     return out
 
 
+def _apply_category_cap(ranked: list[dict], cap: int) -> list[dict]:
+    """「研究前沿」类（category == RESEARCH_CATEGORY）最多保留 cap 篇，其余照序保留。
+
+    研究类文章被截断后，后续实践/概念文章自然补位，保证 digest 主体是实践内容。
+    """
+    if cap <= 0:
+        return ranked
+    seen = 0
+    out: list[dict] = []
+    for r in ranked:
+        if r.get("category") == config.RESEARCH_CATEGORY:
+            if seen >= cap:
+                continue
+            seen += 1
+        out.append(r)
+    return out
+
+
 def require_token(x_fluxia_token: str | None = Header(default=None)) -> None:
     """轻量鉴权：配置了 FLUXIARSS_API_TOKEN 时，校验 X-Fluxia-Token 头。"""
     if config.FLUXIARSS_API_TOKEN and x_fluxia_token != config.FLUXIARSS_API_TOKEN:
@@ -105,9 +123,10 @@ def get_digest(d: date | None = None, top: int | None = None) -> Digest:
     pool = list_articles(RANK_POOL, since=since) or list_articles(RANK_POOL)
     # 先排全量候选（top_n 传 len(pool) 而非 k：rank_articles 内部按
     # DEFAULT_DIGEST_SIZE 预截断，传小值会导致配额无法从更靠后的来源补位），
-    # 再按来源配额去重防霸屏，最后取 Top K。
+    # 再按来源配额去重防霸屏，再按研究类硬上限过滤，最后取 Top K。
     ranked_all = rank_articles(pool, top_n=len(pool) or 1)
-    ranked = _apply_source_cap(ranked_all, config.DIGEST_MAX_PER_SOURCE)[:k]
+    ranked = _apply_source_cap(ranked_all, config.DIGEST_MAX_PER_SOURCE)
+    ranked = _apply_category_cap(ranked, config.RESEARCH_MAX_IN_DIGEST)[:k]
     # 跨端同步：取每篇文章最近一次评分，插件据此显示「已评」并避免重复评分
     latest = get_latest_ratings([r["id"] for r in ranked]) if ranked else {}
     items = [
@@ -119,6 +138,7 @@ def get_digest(d: date | None = None, top: int | None = None) -> Digest:
             url=r["url"],
             reason=r["reason"],
             source=r["source"] or "",
+            category=r.get("category") or "other",
             rated=RatedInfo(**latest[r["id"]]) if r["id"] in latest else None,
         )
         for i, r in enumerate(ranked)

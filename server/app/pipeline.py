@@ -11,7 +11,8 @@ def run_pipeline() -> dict:
     added = 0
     for item in items:
         if insert_article(
-            item["id"], item["url"], item["title"], item["source"], item["summary"]
+            item["id"], item["url"], item["title"], item["source"],
+            item["summary"], item.get("category"),
         ):
             added += 1
     return {"fetched": len(items), "new_added": added}
