@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 
@@ -81,9 +81,13 @@ def get_digest(d: date | None = None, top: int | None = None) -> Digest:
     init_db()
     k = top if top is not None else config.DEFAULT_DIGEST_SIZE
     k = max(1, min(k, 50))
+    # 今日新鲜池：只取最近 FRESH_WINDOW_HOURS 内采集到的文章，昨天的自然滑出，
+    # 评分/信任只在今日新文内决定排序；空池（当日尚未采集）回退全池保证非空。
+    since = (datetime.now(timezone.utc) - timedelta(hours=config.FRESH_WINDOW_HOURS)).isoformat()
+    pool = list_articles(RANK_POOL, since=since) or list_articles(RANK_POOL)
     # top_n 显式传 k：rank_articles 内部按 DEFAULT_DIGEST_SIZE 预截断，
     # 不传的话 ?top=20 也拿不到默认 15 条以外的文章。
-    ranked = rank_articles(list_articles(RANK_POOL), top_n=k)[:k]
+    ranked = rank_articles(pool, top_n=k)[:k]
     # 跨端同步：取每篇文章最近一次评分，插件据此显示「已评」并避免重复评分
     latest = get_latest_ratings([r["id"] for r in ranked]) if ranked else {}
     items = [

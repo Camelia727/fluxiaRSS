@@ -88,11 +88,19 @@ def insert_article(aid: str, url: str, title: str, source: str, summary: str) ->
     return True
 
 
-def list_articles(limit: int) -> list[dict]:
+def list_articles(limit: int, since: str | None = None) -> list[dict]:
+    """取最近采集的文章；since 为 ISO 时间时，只取 fetched_at >= since（新鲜池）。"""
     with _conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM articles ORDER BY fetched_at DESC LIMIT ?", (limit,)
-        ).fetchall()
+        if since is None:
+            rows = conn.execute(
+                "SELECT * FROM articles ORDER BY fetched_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM articles WHERE fetched_at >= ? "
+                "ORDER BY fetched_at DESC LIMIT ?",
+                (since, limit),
+            ).fetchall()
         return [dict(r) for r in rows]
 
 

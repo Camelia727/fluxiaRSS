@@ -15,6 +15,9 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 APP_NAME = os.getenv("FLUXIARSS_APP_NAME", "fluxiaRSS")
 API_PREFIX = "/api/v1"
 DEFAULT_DIGEST_SIZE = int(os.getenv("DIGEST_SIZE", "8"))
+# digest 候选池只取最近 FRESH_WINDOW_HOURS 小时内采集到的文章（今日新鲜池）；
+# 空池时回退全池，保证 digest 非空
+FRESH_WINDOW_HOURS = int(os.getenv("FRESH_WINDOW_HOURS", "24"))
 EXPLORATION_BUDGET = float(os.getenv("EXPLORATION_BUDGET", "0.15"))
 
 # 数据库（本地文件）
