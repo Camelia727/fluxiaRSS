@@ -7,20 +7,21 @@ import httpx
 import feedparser
 
 from app import config
-from app.collector import _entry_age_days, _hash, _relevant
+from app.collector import _entry_age_days, _hash
 from app.db import get_article, init_db, list_sources
+from app.relevance import relevant
 
 
 def main() -> None:
     init_db()
-    print(f"{'SOURCE':<22}{'RAW':>6}{'REL':>6}{'NEW':>6}")
+    print(f"{'SOURCE':<22}{'RAW':>6}{'WIN':>6}{'KW':>6}{'NEW':>6}")
     with httpx.Client(follow_redirects=True, timeout=20) as client:
         for feed in list_sources():
             try:
                 text = client.get(feed["url"]).text
                 parsed = feedparser.parse(text)
                 raw = len(parsed.entries)
-                rel = new = 0
+                win = kw = new = 0
                 for entry in parsed.entries[: config.PER_FEED_CAP * 3]:
                     title = getattr(entry, "title", "") or ""
                     desc = (
@@ -30,14 +31,19 @@ def main() -> None:
                     )
                     link = getattr(entry, "link", "") or ""
                     age = _entry_age_days(entry)
-                    if age is not None and age > config.MAX_AGE_DAYS:
+                    # 按源放宽年龄窗口（与 collector 一致）；关键词只计软信号命中数，
+                    # 不再硬过滤（KW 列反映旧硬过滤会挡掉多少候选）
+                    max_age = config.SOURCE_MAX_AGE_DAYS.get(
+                        feed["name"], config.MAX_AGE_DAYS
+                    )
+                    if age is not None and age > max_age:
                         continue
-                    if not _relevant(title, desc):
-                        continue
-                    rel += 1
+                    win += 1
+                    if relevant(title, desc):
+                        kw += 1
                     if link and not get_article(_hash(link)):
                         new += 1
-                print(f"{feed['name']:<22}{raw:>6}{rel:>6}{new:>6}")
+                print(f"{feed['name']:<22}{raw:>6}{win:>6}{kw:>6}{new:>6}")
             except Exception as exc:  # noqa: BLE001
                 print(f"{feed['name']:<22}  FAIL  {type(exc).__name__}: {exc}")
     print("done")

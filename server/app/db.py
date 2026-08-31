@@ -57,6 +57,14 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS deleted_sources (
+                url        TEXT PRIMARY KEY,
+                deleted_at TEXT NOT NULL
+            )
+            """
+        )
         # 幂等迁移：老库 articles 表没有 category 列，补上
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(articles)")}
         if "category" not in cols:
@@ -82,13 +90,19 @@ def sync_builtin_sources() -> None:
 
     - custom=0 且 URL 仍在配置中 → 用配置更新 topic/name（config 权威）
     - custom=0 且已从配置移除 → 删除该源行及其名下文章（如移除 arXiv 后清掉存量）
-    - 不重新插入配置里的新内置源，用户删过的内置源不会因重启复活
+    - 配置里新增、表中缺失的内置源 → 插入为 custom=0；但用户删除过的内置源
+      记在 deleted_sources 墓碑表里，不会被复活（区分「新加」与「用户删过」）
     """
     with _conn() as conn:
         feeds = {f["url"]: f for f in config.FEEDS}
         rows = conn.execute(
             "SELECT url, name, custom FROM sources"
         ).fetchall()
+        present = {r["url"] for r in rows}
+        tombstones = {
+            r["url"]
+            for r in conn.execute("SELECT url FROM deleted_sources").fetchall()
+        }
         removed_names: list[str] = []
         for row in rows:
             if row["custom"]:
@@ -104,6 +118,16 @@ def sync_builtin_sources() -> None:
                     "DELETE FROM sources WHERE url=? AND custom=0", (row["url"],)
                 )
                 removed_names.append(row["name"])
+        # 新增内置源：config.FEEDS 里有但表中没有、且未被用户删除过的，补插
+        now = datetime.now(timezone.utc).isoformat()
+        for url, feed in feeds.items():
+            if url in present or url in tombstones:
+                continue
+            conn.execute(
+                "INSERT INTO sources (id, url, name, topic, custom, added_at) "
+                "VALUES (?, ?, ?, ?, 0, ?)",
+                (_hash(url), url, feed["name"], feed["topic"], now),
+            )
         for name in removed_names:
             conn.execute("DELETE FROM articles WHERE source=?", (name,))
 
@@ -239,9 +263,16 @@ def add_source(url: str, name: str | None = None,
 
 
 def remove_source(url: str) -> bool:
+    """删除一个 RSS 源；内置源删除记墓碑，防止 sync 重启时复活。"""
     with _conn() as conn:
         cur = conn.execute("DELETE FROM sources WHERE url=?", (url,))
-        return cur.rowcount > 0
+        removed = cur.rowcount > 0
+        if removed and any(f["url"] == url for f in config.FEEDS):
+            conn.execute(
+                "INSERT OR REPLACE INTO deleted_sources (url, deleted_at) VALUES (?, ?)",
+                (url, datetime.now(timezone.utc).isoformat()),
+            )
+        return removed
 
 
 def add_rating(article_id: str, score: int | None, comment: str | None,

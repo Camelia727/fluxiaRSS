@@ -1,9 +1,8 @@
-"""fluxiaRSS 采集器：抓取 RSS → 去重 → 关键词相关过滤 → 并发概述。"""
+"""fluxiaRSS 采集器：抓取 RSS → 去重 → 关键词软信号加权 → 并发概述。"""
 from __future__ import annotations
 
-import hashlib
 import calendar
-import re
+import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
@@ -13,27 +12,13 @@ import httpx
 from . import config
 from .classify import classify
 from .db import get_article, list_sources, preference_tokens, source_stats
+from .honcho_client import get_profile
 from .llm import summarize
+from .relevance import relevant
 
 
 def _hash(url: str) -> str:
     return hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
-
-
-def _relevant(title: str, desc: str) -> bool:
-    """关键词相关性：英文词整词匹配（兼容 agents/llms 等词尾），中文子串匹配。
-
-    大小写不敏感；英文用词边界避免 "ai" 误命中 said/available 等普通词。
-    """
-    low = f"{title} {desc}".lower()
-    for kw in config.KEYWORDS:
-        k = kw.lower()
-        if k.isascii():
-            if re.search(rf"\b{re.escape(k)}\w*", low):
-                return True
-        elif k in low:
-            return True
-    return False
 
 
 def _entry_age_days(entry) -> float | None:
@@ -52,9 +37,9 @@ def _entry_age_days(entry) -> float | None:
 def collect_candidates() -> list[dict]:
     """采集并过滤相关文章（尚未概述、尚未入库）。
 
-    关键词过滤 + 去重之外，评分参与筛选（混合力度）：
+    关键词**软信号**（不硬过滤，只加权）+ 去重之外，评分参与筛选（混合力度）：
     - 来源门控：均分 < SOURCE_MIN_TRUST 且评分 >= SOURCE_MIN_RATINGS 条的源，整轮跳过
-    - 内容偏好：反偏好词命中且无正偏好 → 硬删；命中正偏好 → 采集权重 +1
+    - 内容偏好：反偏好词命中且无正偏好也无关键词命中 → 硬删；命中正偏好/关键词 → 采集权重 +1
     - 探索保底：每源名额内保 EXPLORATION_BUDGET 比例给非偏好文章
     冷启动（无评分）时三档都不生效，行为与原来一致。
     """
@@ -96,18 +81,24 @@ def collect_candidates() -> list[dict]:
                     if not link or not title:
                         continue
                     age = _entry_age_days(entry)
-                    if age is not None and age > config.MAX_AGE_DAYS:
-                        continue
-                    if not _relevant(title, desc):
+                    # 按源放宽年龄窗口：慢更新源（如 Cloudflare/Vercel）用更长窗口，
+                    # 其余源回退全局 MAX_AGE_DAYS
+                    max_age = config.SOURCE_MAX_AGE_DAYS.get(
+                        feed["name"], config.MAX_AGE_DAYS
+                    )
+                    if age is not None and age > max_age:
                         continue
                     aid = _hash(link)
                     if get_article(aid):
                         continue
-                    # 内容偏好：反偏好词硬删；命中正偏好则标记加权
+                    # 关键词软信号（不硬过滤）：命中正偏好/关键词 → 采集加权；
+                    # 反偏好命中且无正偏好也无关键词命中才硬删（低分流到
+                    # ranking 的 avg_rating 压排名，不在采集期直接 DROP）
                     hay = f"{title} {desc}".lower()
                     hit_neg = any(t in hay for t in neg)
                     hit_pos = any(t in hay for t in pos)
-                    if hit_neg and not hit_pos:
+                    kw_hit = relevant(title, desc)
+                    if hit_neg and not (hit_pos or kw_hit):
                         continue
                     feed_cands.append(
                         {
@@ -116,7 +107,7 @@ def collect_candidates() -> list[dict]:
                             "title": title,
                             "source": feed["name"],
                             "desc": desc,
-                            "_pref": "pos" if hit_pos else "neutral",
+                            "_pref": "pos" if (hit_pos or kw_hit) else "neutral",
                         }
                     )
                 cands.extend(_pick_by_preference(feed_cands))
@@ -146,9 +137,10 @@ def _pick_by_preference(feed_cands: list[dict],
     return keep
 
 
-def _summarize_parallel(cands: list[dict], workers: int) -> list[dict]:
+def _summarize_parallel(cands: list[dict], workers: int,
+                        profile: str = "") -> list[dict]:
     def work(item: dict) -> dict:
-        item["summary"] = summarize(item["title"], item["desc"])
+        item["summary"] = summarize(item["title"], item["desc"], profile)
         # 简单规则分类（research/practical/news/other），随文章入库
         item["category"] = classify(item["title"], item["desc"], item["source"])
         return item
@@ -162,6 +154,11 @@ def _summarize_parallel(cands: list[dict], workers: int) -> list[dict]:
 
 
 def collect_all(workers: int | None = None) -> list[dict]:
-    """返回本轮新增文章（含概述）。并发调 DeepSeek。"""
+    """返回本轮新增文章（含概述）。并发调 DeepSeek。
+
+    Honcho 画像每轮取一次（best-effort，失败返回空串），透传概述 prompt，
+    让摘要贴合用户主题定位；画像本身不会过滤任何文章。
+    """
     workers = workers or config.SUMMARY_WORKERS
-    return _summarize_parallel(collect_candidates(), workers)
+    profile = get_profile()
+    return _summarize_parallel(collect_candidates(), workers, profile)
