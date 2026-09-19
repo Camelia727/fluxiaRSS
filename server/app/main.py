@@ -11,18 +11,25 @@ from . import config
 from .db import (
     add_rating,
     add_source,
+    create_zone,
+    delete_zone,
     get_article,
     get_latest_ratings,
+    get_zone,
     init_db,
     list_articles,
     list_sources,
+    list_zones,
     remove_source,
+    update_zone,
+    zone_params,
 )
 from .pipeline import run_pipeline
 from .ranking import rank_articles
 from . import honcho_client
 from . import scheduler
 from .schemas import (
+    ZoneOut, ZoneDetail, ZoneIn,
     Conclusion,
     Digest,
     DigestItem,
@@ -43,6 +50,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="fluxiaRSS API", version="0.2.0", lifespan=lifespan)
+
+# 分区标识约束：小写字母/数字/下划线/短横线，1-32 位（作为 URL 路径段）
+_ZONE_ID_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
 
 # 排序候选池大小（先取最近 N 条再排序取 Top）
 RANK_POOL = 100
@@ -103,47 +113,15 @@ def health() -> dict:
 
 @app.post("/api/v1/collect", dependencies=[Depends(require_token)])
 def collect() -> dict:
-    """手动触发采集：抓取→概述→落库。"""
-    return run_pipeline()
+    """向后兼容：等价于 /api/v1/zones/default/collect。"""
+    return run_pipeline(zone="default")
 
 
 @app.get("/api/v1/digest", response_model=Digest,
          dependencies=[Depends(require_token)])
 def get_digest(d: date | None = None, top: int | None = None) -> Digest:
-    """从候选池中按偏好排序，返回 Top K。
-
-    K 由 `?top=` 指定（钳制到 1-50），缺省用配置项 DIGEST_SIZE。
-    """
-    init_db()
-    k = top if top is not None else config.DEFAULT_DIGEST_SIZE
-    k = max(1, min(k, 50))
-    # 今日新鲜池：只取最近 FRESH_WINDOW_HOURS 内采集到的文章，昨天的自然滑出，
-    # 评分/信任只在今日新文内决定排序；空池（当日尚未采集）回退全池保证非空。
-    since = (datetime.now(timezone.utc) - timedelta(hours=config.FRESH_WINDOW_HOURS)).isoformat()
-    pool = list_articles(RANK_POOL, since=since) or list_articles(RANK_POOL)
-    # 先排全量候选（top_n 传 len(pool) 而非 k：rank_articles 内部按
-    # DEFAULT_DIGEST_SIZE 预截断，传小值会导致配额无法从更靠后的来源补位），
-    # 再按来源配额去重防霸屏，再按研究类硬上限过滤，最后取 Top K。
-    ranked_all = rank_articles(pool, top_n=len(pool) or 1)
-    ranked = _apply_source_cap(ranked_all, config.DIGEST_MAX_PER_SOURCE)
-    ranked = _apply_category_cap(ranked, config.RESEARCH_MAX_IN_DIGEST)[:k]
-    # 跨端同步：取每篇文章最近一次评分，插件据此显示「已评」并避免重复评分
-    latest = get_latest_ratings([r["id"] for r in ranked]) if ranked else {}
-    items = [
-        DigestItem(
-            article_id=r["id"],
-            rank=i + 1,
-            title=r["title"],
-            summary=r["summary"] or "",
-            url=r["url"],
-            reason=r["reason"],
-            source=r["source"] or "",
-            category=r.get("category") or "other",
-            rated=RatedInfo(**latest[r["id"]]) if r["id"] in latest else None,
-        )
-        for i, r in enumerate(ranked)
-    ]
-    return Digest(date=d or date.today(), items=items)
+    """向后兼容：等价于 /api/v1/zones/default/digest。"""
+    return zone_digest("default", d, top)
 
 
 @app.post("/api/v1/rating", response_model=RatingOut,
@@ -193,8 +171,187 @@ def _parse_conclusions(rep: str) -> list[Conclusion]:
 @app.get("/api/v1/profile", response_model=Profile,
          dependencies=[Depends(require_token)])
 def get_profile() -> Profile:
-    """读取 Honcho 画像（best-effort：未启用/不可用/无数据时返回空画像）。"""
-    rep = honcho_client.get_profile()
+    """向后兼容：等价于 /api/v1/zones/default/profile。"""
+    return zone_profile("default")
+
+
+@app.get("/api/v1/sources", response_model=list[SourceInfo],
+         dependencies=[Depends(require_token)])
+def get_sources() -> list[SourceInfo]:
+    """向后兼容：等价于 /api/v1/zones/default/sources。"""
+    return zone_sources("default")
+
+
+@app.post("/api/v1/sources", response_model=SourceInfo, status_code=201,
+          dependencies=[Depends(require_token)])
+def create_source(s: SourceIn) -> SourceInfo:
+    """向后兼容：等价于 POST /api/v1/zones/default/sources。"""
+    return zone_add_source("default", s)
+
+
+@app.delete("/api/v1/sources", dependencies=[Depends(require_token)])
+def delete_source(url: str) -> dict:
+    """向后兼容：等价于 DELETE /api/v1/zones/default/sources。"""
+    return zone_remove_source("default", url)
+
+
+
+# ---- Zone CRUD ----
+
+@app.get("/api/v1/zones", dependencies=[Depends(require_token)])
+def zones_list():
+    """列出所有分区。"""
+    init_db()
+    zones = list_zones()
+    return [
+        ZoneOut(
+            id=z["id"],
+            display=z["display"],
+            feed_count=z["feed_count"],
+            keyword_count=z["keyword_count"],
+            created_at=z["created_at"],
+        )
+        for z in zones
+    ]
+
+
+@app.get("/api/v1/zones/{zone}", response_model=ZoneDetail,
+         dependencies=[Depends(require_token)])
+def zones_get(zone: str):
+    """查看分区详情。"""
+    init_db()
+    z = get_zone(zone)
+    if not z:
+        raise HTTPException(status_code=404, detail="zone not found")
+    return ZoneDetail(
+        id=z["id"],
+        display=z["display"],
+        feeds=[SourceInfo(name=f["name"], url=f["url"], topic=f.get("topic","")) for f in z["feeds"]],
+        keywords=z["keywords"],
+        config=z["config"],
+        created_at=z["created_at"],
+    )
+
+
+@app.post("/api/v1/zones", status_code=201, response_model=ZoneDetail,
+          dependencies=[Depends(require_token)])
+def zones_create(z: ZoneIn):
+    """创建新区。id 指定区标识（URL 路径用），display 为展示名。"""
+    init_db()
+    zone_id = (z.id or "").strip()
+    if not _ZONE_ID_RE.match(zone_id):
+        raise HTTPException(
+            status_code=422,
+            detail="id 必填，只能用小写字母/数字/下划线/短横线（1-32 位）",
+        )
+    result = create_zone(
+        zone_id, z.display,
+        [{"name": f.name or "", "url": f.url, "topic": f.topic or ""} for f in z.feeds],
+        z.keywords, z.config,
+    )
+    if not result:
+        raise HTTPException(status_code=409, detail="zone already exists")
+    return zones_get(zone_id)
+
+
+@app.put("/api/v1/zones/{zone}", response_model=ZoneDetail,
+         dependencies=[Depends(require_token)])
+def zones_update(zone: str, z: ZoneIn):
+    """更新分区配置（部分更新）。
+
+    以请求体里「实际提供了哪些字段」为准（model_fields_set），因此显式传
+    空数组可以清空 feeds / keywords，传空对象可以重置 config；未提及的字段
+    保持原值。区标识 id 不可变，请求体中的 id 被忽略。
+    """
+    init_db()
+    provided = z.model_fields_set
+    result = update_zone(
+        zone,
+        display=z.display if "display" in provided else None,
+        feeds=([{"name": f.name or "", "url": f.url, "topic": f.topic or ""}
+                for f in z.feeds] if "feeds" in provided else None),
+        keywords=z.keywords if "keywords" in provided else None,
+        config_data=z.config if "config" in provided else None,
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="zone not found")
+    return zones_get(zone)
+
+
+@app.delete("/api/v1/zones/{zone}", dependencies=[Depends(require_token)])
+def zones_delete(zone: str):
+    """删除分区（及名下所有文章）。最后一个区不允许删。"""
+    init_db()
+    ok, reason = delete_zone(zone)
+    if not ok:
+        if reason == "not_found":
+            raise HTTPException(status_code=404, detail="zone not found")
+        raise HTTPException(status_code=409, detail="不能删除最后一个分区")
+    return {"ok": True, "zone": zone}
+
+
+# ---- Per-zone operation endpoints ----
+
+
+@app.get("/api/v1/zones/{zone}/digest", response_model=Digest,
+         dependencies=[Depends(require_token)])
+def zone_digest(zone: str, d: date | None = None, top: int | None = None):
+    """某区的 digest：K / 新鲜窗口 / 每源配额 / 研究类上限均按区生效。"""
+    init_db()
+    if not get_zone(zone):
+        raise HTTPException(status_code=404, detail="zone not found")
+    p = zone_params(zone)
+    k = top if top is not None else p["digest_size"]
+    k = max(1, min(k, 50))
+    since = (datetime.now(timezone.utc) - timedelta(hours=p["fresh_window_hours"])).isoformat()
+    pool = list_articles(RANK_POOL, since=since, zone=zone) or list_articles(RANK_POOL, zone=zone)
+    ranked_all = rank_articles(pool, top_n=len(pool) or 1, zone=zone)
+    ranked = _apply_source_cap(ranked_all, p["max_per_source"])
+    ranked = _apply_category_cap(ranked, p["research_max"])[:k]
+    latest = get_latest_ratings([r["id"] for r in ranked]) if ranked else {}
+    items = [
+        DigestItem(
+            article_id=r["id"],
+            rank=i + 1,
+            title=r["title"],
+            summary=r["summary"] or "",
+            url=r["url"],
+            reason=r["reason"],
+            source=r["source"] or "",
+            category=r.get("category") or "other",
+            rated=RatedInfo(**latest[r["id"]]) if r["id"] in latest else None,
+        )
+        for i, r in enumerate(ranked)
+    ]
+    return Digest(date=d or date.today(), items=items)
+
+
+@app.post("/api/v1/zones/{zone}/collect", dependencies=[Depends(require_token)])
+def zone_collect(zone: str):
+    """手动触发某区采集。"""
+    return run_pipeline(zone=zone)
+
+
+@app.post("/api/v1/zones/{zone}/rating", response_model=RatingOut,
+          dependencies=[Depends(require_token)])
+def zone_rating(zone: str, r: RatingIn):
+    """记录某区评分。"""
+    if r.score is not None and not (0 <= r.score <= 10):
+        raise HTTPException(status_code=422, detail="score must be 0-10")
+    init_db()
+    if not add_rating(r.article_id, r.score, r.comment, r.action):
+        raise HTTPException(status_code=404, detail="article not found")
+    article = get_article(r.article_id)
+    if article:
+        honcho_client.record_rating(article, r.score, r.comment, r.action, zone=zone)
+    return RatingOut(ok=True, article_id=r.article_id)
+
+
+@app.get("/api/v1/zones/{zone}/profile", response_model=Profile,
+         dependencies=[Depends(require_token)])
+def zone_profile(zone: str):
+    """读取某区的 Honcho 画像。"""
+    rep = honcho_client.get_profile(zone=zone)
     return Profile(
         version=1 if rep else 0,
         conclusions=_parse_conclusions(rep),
@@ -202,38 +359,34 @@ def get_profile() -> Profile:
     )
 
 
-@app.get("/api/v1/sources", response_model=list[SourceInfo],
+@app.get("/api/v1/zones/{zone}/sources", response_model=list[SourceInfo],
          dependencies=[Depends(require_token)])
-def get_sources() -> list[SourceInfo]:
-    """当前生效的 RSS 源列表（内置默认 + 用户自定义）。"""
+def zone_sources(zone: str):
+    """某区的 RSS 源列表。"""
     init_db()
+    feeds = list_sources(zone=zone)
     return [
-        SourceInfo(
-            name=s["name"], url=s["url"], topic=s["topic"],
-            custom=bool(s["custom"]),
-        )
-        for s in list_sources()
+        SourceInfo(name=f["name"], url=f["url"], topic=f.get("topic", ""), custom=True)
+        for f in feeds
     ]
 
 
-@app.post("/api/v1/sources", response_model=SourceInfo, status_code=201,
+@app.post("/api/v1/zones/{zone}/sources", response_model=SourceInfo, status_code=201,
           dependencies=[Depends(require_token)])
-def create_source(s: SourceIn) -> SourceInfo:
-    """新增/更新一个自定义 RSS 源（按 URL 幂等）。URL 非法返回 422。"""
+def zone_add_source(zone: str, s: SourceIn):
+    """为某区添加 RSS 源。"""
     init_db()
-    src = add_source(s.url, s.name, s.topic)
+    src = add_source(s.url, s.name, s.topic, zone=zone)
     if src is None:
         raise HTTPException(status_code=422, detail="invalid url")
-    return SourceInfo(
-        name=src["name"], url=src["url"], topic=src["topic"], custom=True
-    )
+    return SourceInfo(name=src["name"], url=src["url"], topic=src.get("topic", ""), custom=True)
 
 
-@app.delete("/api/v1/sources", dependencies=[Depends(require_token)])
-def delete_source(url: str) -> dict:
-    """按 URL 删除一个 RSS 源（内置或自定义均可）。不存在返回 404。"""
+@app.delete("/api/v1/zones/{zone}/sources", dependencies=[Depends(require_token)])
+def zone_remove_source(zone: str, url: str):
+    """从某区移除 RSS 源。"""
     init_db()
-    if not remove_source(url):
+    if not remove_source(url, zone=zone):
         raise HTTPException(status_code=404, detail="source not found")
     return {"ok": True, "url": url}
 
