@@ -107,8 +107,11 @@ def main() -> int:
           all("创作" in it["title"] for it in body["items"]))
 
     r2 = client.get("/api/v1/zones/default/digest")
-    check("default digest uses global K=8",
-          r2.status_code == 200 and len(r2.json()["items"]) == config.DEFAULT_DIGEST_SIZE,
+    # 不硬比 ==K：每源配额（max_per_source）会把可用数压到 K 之下，
+    # 断言「非空且不超过全局 K」即可验证 default 用全局 K 而非区覆盖
+    check("default digest uses global K (respects K, non-empty)",
+          r2.status_code == 200
+          and 0 < len(r2.json()["items"]) <= config.DEFAULT_DIGEST_SIZE,
           f"got {len(r2.json()['items'])}")
 
     # ---- 5. top 覆盖区配置 ----

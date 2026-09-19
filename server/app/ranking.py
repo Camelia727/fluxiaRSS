@@ -33,8 +33,8 @@ def _score(article: dict, avg_rating: float, trust: float) -> float:
     )
 
 
-def _profile_tokens() -> set[str]:
-    """从 Honcho 画像取关键词；不可用返回空集。
+def _profile_tokens(zone: str = "default") -> set[str]:
+    """从该区 Honcho 画像取关键词；不可用返回空集。
 
     画像原文是 conclusions 原样拼接（含时间戳、标点残留、英文停用词），直接 split
     会让画像命中几乎必然命中、+0.5 加成失去区分度；用 db 的停用词表过滤噪声。
@@ -43,7 +43,7 @@ def _profile_tokens() -> set[str]:
     from .honcho_client import get_profile
 
     try:
-        profile = get_profile()
+        profile = get_profile(zone=zone)
     except Exception:  # noqa: BLE001
         return set()
     return {
