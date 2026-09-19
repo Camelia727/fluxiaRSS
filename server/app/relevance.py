@@ -10,14 +10,15 @@ import re
 from . import config
 
 
-def relevant(title: str, desc: str) -> bool:
+def relevant(title: str, desc: str, keywords: list[str] | None = None) -> bool:
     """关键词相关性：英文词整词匹配（允许常见词尾），中文子串匹配。
 
     大小写不敏感；英文用词边界避免 "ai" 误命中 said/available/air 等普通词，
     只允许 s/es/ing/ed/ly 常见词尾，避免 "ai" 命中 Airtable 这类以 ai 开头的词。
     """
     low = f"{title} {desc}".lower()
-    for kw in config.KEYWORDS:
+    kws = keywords if keywords is not None else config.KEYWORDS
+    for kw in kws:
         k = kw.lower()
         if k.isascii():
             if re.search(rf"\b{re.escape(k)}(?:s|es|ing|ed|ly)?\b", low):

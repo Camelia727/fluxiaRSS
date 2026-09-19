@@ -134,3 +134,11 @@ HONCHO_SESSION_ID = os.getenv("HONCHO_SESSION_ID", "reading")
 
 
 
+
+
+# Zone 分区种子配置（JSON，init_db 时播种预置区；无需不动）
+ZONES_SEED_RAW = os.getenv("FLUXIARSS_ZONES", "")
+try:
+    ZONES_SEED = json.loads(ZONES_SEED_RAW) if ZONES_SEED_RAW else {}
+except (ValueError, json.JSONDecodeError):
+    ZONES_SEED = {}

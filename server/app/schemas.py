@@ -1,13 +1,14 @@
-"""fluxiaRSS API 契约（占位）。"""
+"""fluxiaRSS API 契约。"""
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 from pydantic import BaseModel
 
 
 class RatedInfo(BaseModel):
     """当前用户对某篇文章最近一次的评分（未评过则为 None）。"""
-    score: int | None = None  # 打分 0-10；稍后读/跳过为 None
+    score: int | None = None  # 打分 0-10
     action: str = "read"  # read | skip | later | comment
     comment: str | None = None
 
@@ -19,9 +20,9 @@ class DigestItem(BaseModel):
     summary: str
     url: str
     reason: str
-    source: str = ""  # 来源（RSS 源名）；老数据可能缺失，默认空串
-    category: str = "other"  # research/practical/news/other；老数据可能缺失
-    rated: RatedInfo | None = None  # 跨库/跨端同步：该文章最近一次评分
+    source: str = ""
+    category: str = "other"
+    rated: RatedInfo | None = None
 
 
 class Digest(BaseModel):
@@ -33,7 +34,7 @@ class RatingIn(BaseModel):
     article_id: str
     score: int | None = None
     comment: str | None = None
-    action: str = "read"  # read | skip | later | comment
+    action: str = "read"
 
 
 class RatingOut(BaseModel):
@@ -42,7 +43,7 @@ class RatingOut(BaseModel):
 
 
 class Conclusion(BaseModel):
-    kind: str  # explicit | deductive | inductive
+    kind: str
     statement: str
     confidence: float | None = None
 
@@ -50,17 +51,51 @@ class Conclusion(BaseModel):
 class Profile(BaseModel):
     version: int
     conclusions: list[Conclusion]
-    representation: str = ""  # Honcho 画像原文（best-effort）
+    representation: str = ""
 
 
 class SourceInfo(BaseModel):
     name: str
     url: str
     topic: str
-    custom: bool = False  # True=用户自定义，False=内置默认
+    custom: bool = False
 
 
 class SourceIn(BaseModel):
     url: str
-    name: str | None = None  # 留空则用域名
-    topic: str | None = None  # 留空则 "custom"
+    name: str | None = None
+    topic: str | None = None
+
+
+# -- Zone 模型 --
+
+class ZoneOut(BaseModel):
+    """区视图（列表场景）。"""
+    id: str
+    display: str
+    feed_count: int = 0
+    keyword_count: int = 0
+    created_at: str
+
+
+class ZoneDetail(BaseModel):
+    """区详情（含 feeds / keywords / config）。"""
+    id: str
+    display: str
+    feeds: list[SourceInfo] = []
+    keywords: list[str] = []
+    config: dict[str, Any] = {}
+    created_at: str
+
+
+class ZoneIn(BaseModel):
+    """创建/更新区的请求体。
+
+    id 仅创建时必填（小写字母/数字/下划线/短横线），作为 URL 路径里的区标识；
+    更新时忽略该字段（区标识不可变）。display 为展示名，可与 id 不同。
+    """
+    id: str | None = None
+    display: str
+    feeds: list[SourceIn] = []
+    keywords: list[str] = []
+    config: dict[str, Any] = {}
