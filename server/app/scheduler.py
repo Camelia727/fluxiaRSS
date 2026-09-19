@@ -20,14 +20,22 @@ _scheduler: BackgroundScheduler | None = None
 
 def _job() -> None:
     global _last
+    results = {}
     try:
-        result = run_pipeline()
-    except Exception as exc:  # noqa: BLE001
-        result = {"error": str(exc)}
+        from .db import list_zones
+        zones = list_zones()
+        for z in zones:
+            zid = z["id"]
+            try:
+                results[zid] = run_pipeline(zone=zid)
+            except Exception as exc:
+                results[zid] = {"error": str(exc)}
+    except Exception as exc:
+        results["_error"] = str(exc)
     with _lock:
         _last = {
             "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "result": result,
+            "result": results,
         }
 
 

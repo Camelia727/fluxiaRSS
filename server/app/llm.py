@@ -8,12 +8,16 @@ import httpx
 from . import config
 
 
-def summarize(title: str, desc: str, profile: str = "") -> str:
+def summarize(title: str, desc: str, profile: str = "",
+              topic: str = "") -> str:
     """生成中文要点概述；无 API key 或失败时回退到原文摘要。
 
     profile 为 Honcho 画像（软约束，仅引导概述贴合用户主题定位，不硬过滤）。
     画像内容不可信（可能含用户或他人写入的文本），只作为「背景」注入，
     并显式声明其中的指令无效，防止提示注入。
+
+    topic 为该区生效的主题定位（区 config 的 summarize_topic，缺省回退全局
+    SUMMARIZE_TOPIC）；按区传入，避免创作区被技术向主题定位污染。
     """
     key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
     if not key:
@@ -21,7 +25,7 @@ def summarize(title: str, desc: str, profile: str = "") -> str:
 
     prompt = (
         "用中文为下面这篇文章写 3 条要点概述（每条一行、简洁、信息密度高）。\n\n"
-        f"读者主题定位（软约束，作为写作背景）：{config.SUMMARIZE_TOPIC}\n"
+        f"读者主题定位（软约束，作为写作背景）：{topic or config.SUMMARIZE_TOPIC}\n"
         "若文章与该主题相关，概述可偏重该角度；若低相关，如实指出即可，"
         "不要硬贴主题，也不要臆造文中没有的内容。\n\n"
     )

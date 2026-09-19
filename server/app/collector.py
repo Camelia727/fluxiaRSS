@@ -11,7 +11,14 @@ import httpx
 
 from . import config
 from .classify import classify
-from .db import get_article, list_sources, preference_tokens, source_stats
+from .db import (
+    get_article,
+    get_zone_keywords,
+    list_sources,
+    preference_tokens,
+    source_stats,
+    zone_params,
+)
 from .honcho_client import get_profile
 from .llm import summarize
 from .relevance import relevant
@@ -34,7 +41,7 @@ def _entry_age_days(entry) -> float | None:
         return None
 
 
-def collect_candidates() -> list[dict]:
+def collect_candidates(zone: str = "default") -> list[dict]:
     """采集并过滤相关文章（尚未概述、尚未入库）。
 
     关键词**软信号**（不硬过滤，只加权）+ 去重之外，评分参与筛选（混合力度）：
@@ -43,15 +50,16 @@ def collect_candidates() -> list[dict]:
     - 探索保底：每源名额内保 EXPLORATION_BUDGET 比例给非偏好文章
     冷启动（无评分）时三档都不生效，行为与原来一致。
     """
-    pos, neg = preference_tokens()
-    stats = source_stats()
+    p = zone_params(zone)
+    pos, neg = preference_tokens(zone=zone)
+    stats = source_stats(zone=zone)
     cands: list[dict] = []
     with httpx.Client(
         follow_redirects=True,
         timeout=20,
         headers={"User-Agent": config.FEED_USER_AGENT},
     ) as client:
-        for feed in list_sources():
+        for feed in list_sources(zone=zone):
             # 来源门控（硬）：低分源整轮跳过
             trust, n = stats.get(feed["name"], (None, 0))
             if (
@@ -83,9 +91,10 @@ def collect_candidates() -> list[dict]:
                     age = _entry_age_days(entry)
                     # 按源放宽年龄窗口：慢更新源（如 Cloudflare/Vercel）用更长窗口，
                     # 其余源回退全局 MAX_AGE_DAYS
-                    max_age = config.SOURCE_MAX_AGE_DAYS.get(
-                        feed["name"], config.MAX_AGE_DAYS
-                    )
+                    # 年龄窗口按区生效：区 config 可给更宽的 max_age_days
+                    # （如创作区源更新慢，需要 >2 天窗口），慢更新源仍走按源覆盖
+                    src_age = p["source_max_age_days"] or {}
+                    max_age = src_age.get(feed["name"], p["max_age_days"])
                     if age is not None and age > max_age:
                         continue
                     aid = _hash(link)
@@ -97,7 +106,7 @@ def collect_candidates() -> list[dict]:
                     hay = f"{title} {desc}".lower()
                     hit_neg = any(t in hay for t in neg)
                     hit_pos = any(t in hay for t in pos)
-                    kw_hit = relevant(title, desc)
+                    kw_hit = relevant(title, desc, keywords=get_zone_keywords(zone))
                     if hit_neg and not (hit_pos or kw_hit):
                         continue
                     feed_cands.append(
@@ -110,7 +119,7 @@ def collect_candidates() -> list[dict]:
                             "_pref": "pos" if (hit_pos or kw_hit) else "neutral",
                         }
                     )
-                cands.extend(_pick_by_preference(feed_cands))
+                cands.extend(_pick_by_preference(feed_cands, cap=p["per_feed_cap"]))
             except Exception as exc:  # noqa: BLE001
                 print(f"[collector] feed {feed['name']} failed: {exc}")
     return cands
@@ -138,9 +147,10 @@ def _pick_by_preference(feed_cands: list[dict],
 
 
 def _summarize_parallel(cands: list[dict], workers: int,
-                        profile: str = "") -> list[dict]:
+                        profile: str = "", zone: str = "default",
+                        topic: str = "") -> list[dict]:
     def work(item: dict) -> dict:
-        item["summary"] = summarize(item["title"], item["desc"], profile)
+        item["summary"] = summarize(item["title"], item["desc"], profile, topic=topic)
         # 简单规则分类（research/practical/news/other），随文章入库
         item["category"] = classify(item["title"], item["desc"], item["source"])
         return item
@@ -153,12 +163,12 @@ def _summarize_parallel(cands: list[dict], workers: int,
     return done
 
 
-def collect_all(workers: int | None = None) -> list[dict]:
-    """返回本轮新增文章（含概述）。并发调 DeepSeek。
-
-    Honcho 画像每轮取一次（best-effort，失败返回空串），透传概述 prompt，
-    让摘要贴合用户主题定位；画像本身不会过滤任何文章。
-    """
+def collect_all(zone: str = "default", workers: int | None = None) -> list[dict]:
+    """返回某区本轮新增文章（含概述）。"""
     workers = workers or config.SUMMARY_WORKERS
-    profile = get_profile()
-    return _summarize_parallel(collect_candidates(), workers, profile)
+    p = zone_params(zone)
+    profile = get_profile(zone=zone)
+    return _summarize_parallel(
+        collect_candidates(zone=zone), workers, profile,
+        zone=zone, topic=p["summarize_topic"],
+    )

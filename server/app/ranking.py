@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from . import config
-from .db import get_article_avg_rating, source_trust
+from .db import get_article_avg_rating, get_zone_keywords, source_trust
 from .relevance import relevant
 
 W_RATING = 0.60
@@ -53,7 +53,8 @@ def _profile_tokens() -> set[str]:
     }
 
 
-def rank_articles(articles: list[dict], top_n: int | None = None) -> list[dict]:
+def rank_articles(articles: list[dict], top_n: int | None = None,
+                zone: str = "default") -> list[dict]:
     """返回按 score 降序、附 score/reason 的文章。
 
     画像命中 / 关键词命中都**只判 title**（不判 summary）：概述 prompt 注入了
@@ -61,8 +62,8 @@ def rank_articles(articles: list[dict], top_n: int | None = None) -> list[dict]:
     形成自证循环。关键词加成低于画像加成（0.3 < 0.5），不会压过真实评分。
     """
     top_n = top_n or config.DEFAULT_DIGEST_SIZE
-    trust = source_trust()
-    tokens = _profile_tokens() if config.HONCHO_ENABLED else set()
+    trust = source_trust(zone=zone)
+    tokens = _profile_tokens(zone=zone) if config.HONCHO_ENABLED else set()
     scored = []
     for a in articles:
         avg_r = get_article_avg_rating(a["id"])
@@ -75,7 +76,7 @@ def rank_articles(articles: list[dict], top_n: int | None = None) -> list[dict]:
             reason_parts.append(f"来源信任 {t:.1f}")
         hit = 0.0
         # 关键词软信号（只判 title）：命中加 KEYWORD_HIT_BONUS，reason 标注
-        if relevant(a["title"], ""):
+        if relevant(a["title"], "", keywords=get_zone_keywords(zone)):
             hit += config.KEYWORD_HIT_BONUS
             reason_parts.append("主题相关")
         if tokens and any(tok in a["title"].lower() for tok in tokens):
