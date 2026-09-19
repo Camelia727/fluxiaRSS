@@ -35,11 +35,35 @@ cp .env.example .env        # 填入 DEEPSEEK_API_KEY 等
 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000                          # 起 API
 ```
 
-- `GET /api/v1/digest` — 今日 digest
+- `GET /api/v1/digest` — 今日 digest（等价于 default 区）
 - `POST /api/v1/collect` — 手动触发采集
-- `POST /api/v1/rating` — 反馈（P2 接入）
+- `POST /api/v1/rating` — 反馈
 
-配置见 [`server/.env.example`](server/.env.example)。
+### 分区（zone）
+
+每个分区有**独立的 RSS 源、关键词、每日篇数/时效窗口等配置，以及独立的 Honcho 画像**，
+互不干扰。分区可自由创建，不写死在代码里。
+
+```bash
+# 列出 / 创建分区
+curl -s localhost:8000/api/v1/zones
+curl -X POST localhost:8000/api/v1/zones -H 'Content-Type: application/json' -d '{
+  "id": "creator", "display": "创作灵感·海外见闻",
+  "feeds": [{"name":"Waxy.org Links","url":"https://waxy.org/category/links/feed/"}],
+  "keywords": [],
+  "config": {"digest_size":5,"max_age_days":30,"honcho_workspace":"fluxiars_creator"}
+}'
+
+# 区内操作
+curl -s localhost:8000/api/v1/zones/creator/digest
+curl -X POST localhost:8000/api/v1/zones/creator/collect
+```
+
+`id` 为 URL 路径段（小写字母/数字/`_`/`-`，1-32 位），`display` 是展示名。
+`config` 省略的键回退全局默认，所以 default 区行为不变；完整配置项见
+[`DEPLOY-SERVER.md`](DEPLOY-SERVER.md) 第 3.5 节。Obsidian 插件在设置里选分区。
+
+配置见 [`server/.env.example`](server/.env.example)，部署见 [`DEPLOY-SERVER.md`](DEPLOY-SERVER.md)。
 
 ## 记忆与自成长
 
