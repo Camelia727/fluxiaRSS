@@ -26,6 +26,16 @@
   cursor: default;
 }
 
+.fluxiars-zone-badge {
+  display: inline-block;
+  font-size: 0.75em;
+  padding: 1px 8px;
+  margin-right: 6px;
+  border-radius: 4px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
 .fluxiars-card {
   border: 1px solid var(--background-modifier-border);
   border-radius: 8px;

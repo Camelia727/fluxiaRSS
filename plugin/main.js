@@ -29,7 +29,9 @@ var DEFAULT_SETTINGS = {
   apiToken: "",
   digestDir: "FluxiaRSS",
   digestSize: 8,
-  autoRefreshHour: 6
+  autoRefreshHour: 6,
+  activeZone: "default",
+  knownZones: {}
 };
 var RATED_ACTIONS = [
   { score: null, action: "later", label: "\u{1F552} \u7A0D\u540E\u8BFB" },
@@ -95,6 +97,8 @@ var FluxiaRSSPlugin = class extends import_obsidian.Plugin {
       callback: () => this.collectAndRefresh()
     });
     this.addSettingTab(new FluxiaSettingTab(this.app, this));
+    void this.refreshZones().catch(() => {
+    });
     this.registerInterval(
       window.setInterval(() => this.maybeAutoRefresh(), 60 * 60 * 1e3)
     );
@@ -129,42 +133,86 @@ var FluxiaRSSPlugin = class extends import_obsidian.Plugin {
     );
   }
   // ---- 拉取与笔记 ----
+  /** 当前生效的分区 id（空则回退 default）。 */
+  activeZone() {
+    var _a;
+    return ((_a = this.settings.activeZone) == null ? void 0 : _a.trim()) || "default";
+  }
+  /** 分区 api 前缀：/api/v1/zones/{zone}/... */
+  zonePath(suffix) {
+    const z = encodeURIComponent(this.activeZone());
+    return `/api/v1/zones/${z}${suffix}`;
+  }
+  /**
+   * 每日笔记路径。default 区沿用原来的 `{digestDir}/{date}.md`（不改老行为），
+   * 其他分区落到 `{digestDir}/{zone}/{date}.md`，避免不同分区互相覆盖。
+   */
   getTodayPath() {
-    return `${this.settings.digestDir}/${todayStr()}.md`;
+    const zone = this.activeZone();
+    const dir = zone === "default" ? this.settings.digestDir : `${this.settings.digestDir}/${zone}`;
+    return `${dir}/${todayStr()}.md`;
+  }
+  /** 笔记目录（按分区），用于创建目录。 */
+  getDigestDir() {
+    const zone = this.activeZone();
+    return zone === "default" ? this.settings.digestDir : `${this.settings.digestDir}/${zone}`;
+  }
+  /** 拉取服务端分区列表并缓存 id -> display。失败保持旧缓存，不阻塞主流程。 */
+  async refreshZones() {
+    var _a;
+    const res = await this.api("/api/v1/zones");
+    if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
+    const zones = (_a = res.json) != null ? _a : [];
+    const map = {};
+    for (const z of zones) map[z.id] = z.display || z.id;
+    this.settings.knownZones = map;
+    if (!map[this.activeZone()] && zones.length > 0) {
+      this.settings.activeZone = map["default"] ? "default" : zones[0].id;
+    }
+    await this.saveAll();
+    return zones;
   }
   async todayExists() {
     return this.app.vault.adapter.exists(this.getTodayPath());
   }
   async fetchDigest() {
-    const res = await this.api(`/api/v1/digest?top=${this.settings.digestSize}`);
+    const res = await this.api(
+      this.zonePath(`/digest?top=${this.settings.digestSize}`)
+    );
     if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
-    return res.json;
+    const digest = res.json;
+    digest.zone = this.activeZone();
+    digest.zoneDisplay = this.settings.knownZones[this.activeZone()] || this.activeZone();
+    return digest;
   }
   /**
    * 生成今日笔记。force=true 时覆盖重写（刷新）；否则已存在则跳过。
    * 返回文件（可能为 null：已存在且未强制刷新）。
    */
   async generateTodayNote(force = false) {
+    var _a;
     const path = this.getTodayPath();
     if (!force && await this.app.vault.adapter.exists(path)) return null;
     const digest = await this.fetchDigest();
     digest.generated = (/* @__PURE__ */ new Date()).toISOString();
+    const zoneLabel = digest.zoneDisplay || this.activeZone();
     const content = [
       "---",
       `date: ${digest.date}`,
       `generated: ${digest.generated}`,
+      `zone: ${(_a = digest.zone) != null ? _a : this.activeZone()}`,
       "---",
       "",
-      `# \u{1F4F0} \u4ECA\u65E5\u667A\u8BFB \xB7 ${digest.date}`,
+      `# \u{1F4F0} \u4ECA\u65E5\u667A\u8BFB \xB7 ${zoneLabel} \xB7 ${digest.date}`,
       "",
-      `> \u751F\u6210\u4E8E ${new Date(digest.generated).toTimeString().slice(0, 5)} \xB7 \u5BF9\u6587\u7AE0\u6253\u5206/\u8DF3\u8FC7\uFF0C\u53CD\u9988\u8FDB\u5165\u957F\u671F\u8BB0\u5FC6\uFF0C\u5F71\u54CD\u660E\u5929\u6392\u5E8F\u3002`,
+      `> \u5206\u533A ${zoneLabel} \xB7 \u751F\u6210\u4E8E ${new Date(digest.generated).toTimeString().slice(0, 5)} \xB7 \u5BF9\u6587\u7AE0\u6253\u5206/\u8DF3\u8FC7\uFF0C\u53CD\u9988\u8FDB\u5165\u8BE5\u5206\u533A\u7684\u957F\u671F\u8BB0\u5FC6\uFF0C\u5F71\u54CD\u660E\u5929\u6392\u5E8F\u3002`,
       "",
       "```fluxiars",
       JSON.stringify(digest),
       "```",
       ""
     ].join("\n");
-    await this.app.vault.createFolder(this.settings.digestDir).catch(() => {
+    await this.app.vault.createFolder(this.getDigestDir()).catch(() => {
     });
     await this.app.vault.adapter.write(path, content);
     const f = this.app.vault.getAbstractFileByPath(path);
@@ -196,15 +244,17 @@ var FluxiaRSSPlugin = class extends import_obsidian.Plugin {
     }
   }
   async collectAndRefresh() {
-    var _a, _b;
+    var _a, _b, _c;
     try {
-      const res = await this.api("/api/v1/collect", {
+      const res = await this.api(this.zonePath("/collect"), {
         method: "POST",
         body: {},
         timeout: 12e4
       });
       const body = res.json;
-      new import_obsidian.Notice(`\u91C7\u96C6\u5B8C\u6210\uFF1A\u62C9\u53D6 ${(_a = body == null ? void 0 : body.fetched) != null ? _a : "?"}\uFF0C\u65B0\u589E ${(_b = body == null ? void 0 : body.new_added) != null ? _b : "?"}`);
+      new import_obsidian.Notice(
+        `[${(_a = body == null ? void 0 : body.zone) != null ? _a : this.activeZone()}] \u91C7\u96C6\u5B8C\u6210\uFF1A\u62C9\u53D6 ${(_b = body == null ? void 0 : body.fetched) != null ? _b : "?"}\uFF0C\u65B0\u589E ${(_c = body == null ? void 0 : body.new_added) != null ? _c : "?"}`
+      );
     } catch (e) {
       new import_obsidian.Notice(`\u91C7\u96C6\u5931\u8D25\uFF1A${e.message}`);
     }
@@ -212,7 +262,7 @@ var FluxiaRSSPlugin = class extends import_obsidian.Plugin {
   }
   // ---- 评分 ----
   async submitRating(articleId, score, action) {
-    const res = await this.api("/api/v1/rating", {
+    const res = await this.api(this.zonePath("/rating"), {
       method: "POST",
       body: { article_id: articleId, score, action }
     });
@@ -225,7 +275,7 @@ var FluxiaRSSPlugin = class extends import_obsidian.Plugin {
   /** 给已评分文章补写评论（action=comment，服务端更新最近一条评分行的 comment）。 */
   async submitComment(articleId, comment) {
     var _a;
-    const res = await this.api("/api/v1/rating", {
+    const res = await this.api(this.zonePath("/rating"), {
       method: "POST",
       body: { article_id: articleId, comment, action: "comment" }
     });
@@ -245,6 +295,7 @@ var DigestRenderer = class {
     this.rootEl = null;
   }
   renderInto(el) {
+    var _a, _b, _c;
     el.addClass("fluxiars-digest");
     el.empty();
     this.rootEl = el;
@@ -257,8 +308,11 @@ var DigestRenderer = class {
     this.mergeServerRatings();
     const header = el.createDiv({ cls: "fluxiars-header" });
     const gen = this.digest.generated ? new Date(this.digest.generated).toTimeString().slice(0, 5) : "\u2014";
+    const zoneId = (_a = this.digest.zone) != null ? _a : this.plugin.activeZone();
+    const zoneLabel = (_c = (_b = this.digest.zoneDisplay) != null ? _b : this.plugin.settings.knownZones[zoneId]) != null ? _c : zoneId;
+    header.createEl("span", { cls: "fluxiars-zone-badge", text: `\u5206\u533A \xB7 ${zoneLabel}` });
     header.createEl("span", {
-      text: `\u{1F4F0} ${this.digest.date} \xB7 ${this.digest.items.length} \u7BC7 \xB7 \u751F\u6210 ${gen}`
+      text: ` \xB7 \u{1F4F0} ${this.digest.date} \xB7 ${this.digest.items.length} \u7BC7 \xB7 \u751F\u6210 ${gen}`
     });
     const refreshBtn = header.createEl("button", {
       cls: "fluxiars-refresh",
@@ -455,6 +509,7 @@ var FluxiaSettingTab = class extends import_obsidian.PluginSettingTab {
       t.inputEl.type = "password";
       t.inputEl.placeholder = "FLUXIARSS_API_TOKEN \u7684\u503C";
     });
+    this.renderZoneSection(containerEl);
     new import_obsidian.Setting(containerEl).setName("digest \u76EE\u5F55").setDesc("\u6BCF\u65E5\u7B14\u8BB0\u5B58\u653E\u76EE\u5F55\uFF08vault \u5185\u76F8\u5BF9\u8DEF\u5F84\uFF09").addText(
       (t) => t.setValue(this.plugin.settings.digestDir).onChange(async (v) => {
         this.plugin.settings.digestDir = v.trim() || DEFAULT_SETTINGS.digestDir;
@@ -475,12 +530,59 @@ var FluxiaSettingTab = class extends import_obsidian.PluginSettingTab {
     );
     this.renderSourcesSection(containerEl);
   }
-  // ---- RSS 源管理（服务端 DB 持久化） ----
-  renderSourcesSection(containerEl) {
-    containerEl.createEl("h3", { text: "RSS \u6E90" });
+  // ---- 分区（服务端 /api/v1/zones） ----
+  /**
+   * 分区选择器：下拉列出服务端所有分区，「刷新分区列表」重新拉取。
+   * 切换分区后，本次会话的 digest 路径、评分、源管理都会指向新分区。
+   */
+  renderZoneSection(containerEl) {
+    containerEl.createEl("h3", { text: "\u5206\u533A" });
     containerEl.createEl("p", {
       cls: "setting-item-description",
-      text: "\u589E\u5220\u81EA\u5B9A\u4E49 RSS \u6E90\uFF08\u5185\u7F6E\u6E90\u4E5F\u5217\u4E8E\u6B64\uFF09\u3002\u6539\u52A8\u540E\u8FD0\u884C\u300C\u7ACB\u5373\u91C7\u96C6\u5E76\u5237\u65B0\u300D\u62C9\u53D6\u65B0\u6E90\u3002"
+      text: "\u6BCF\u4E2A\u5206\u533A\u6709\u72EC\u7ACB\u7684 RSS \u6E90\u3001\u6BCF\u65E5\u7BC7\u6570\u4E0E\u957F\u671F\u8BB0\u5FC6\uFF08Honcho \u753B\u50CF\uFF09\u3002\u5207\u6362\u5206\u533A\u540E\uFF0C\u7B14\u8BB0\u76EE\u5F55\u4E0E\u6253\u5206\u90FD\u4F1A\u6307\u5411\u8BE5\u5206\u533A\u3002"
+    });
+    const setting = new import_obsidian.Setting(containerEl).setName("\u5F53\u524D\u5206\u533A").setDesc("\u9009\u62E9\u8981\u9605\u8BFB\u7684\u5206\u533A\uFF1B\u670D\u52A1\u7AEF\u672A\u542F\u52A8\u65F6\u5148\u7528\u300C\u5237\u65B0\u5206\u533A\u5217\u8868\u300D\u62C9\u53D6\u3002");
+    setting.addDropdown((dd) => {
+      const zones = this.plugin.settings.knownZones;
+      const ids = Object.keys(zones);
+      if (ids.length === 0) {
+        dd.addOption(this.plugin.activeZone(), this.plugin.activeZone());
+      } else {
+        for (const id of ids) dd.addOption(id, `${zones[id]}\uFF08${id}\uFF09`);
+      }
+      dd.setValue(this.plugin.activeZone());
+      dd.onChange(async (v) => {
+        var _a;
+        this.plugin.settings.activeZone = v;
+        await this.plugin.saveAll();
+        this.display();
+        new import_obsidian.Notice(`\u5DF2\u5207\u6362\u5230\u5206\u533A\uFF1A${(_a = this.plugin.settings.knownZones[v]) != null ? _a : v}`);
+      });
+    });
+    new import_obsidian.Setting(containerEl).setName("\u5237\u65B0\u5206\u533A\u5217\u8868").setDesc("\u4ECE\u670D\u52A1\u7AEF /api/v1/zones \u91CD\u65B0\u62C9\u53D6\u5206\u533A\uFF0C\u66F4\u65B0\u4E0A\u9762\u7684\u4E0B\u62C9\u9009\u9879\u3002").addButton(
+      (btn) => btn.setButtonText("\u{1F504} \u62C9\u53D6\u5206\u533A").onClick(async () => {
+        btn.setDisabled(true);
+        btn.setButtonText("\u62C9\u53D6\u4E2D\u2026");
+        try {
+          await this.plugin.refreshZones();
+          this.display();
+          new import_obsidian.Notice("\u5206\u533A\u5217\u8868\u5DF2\u66F4\u65B0 \u2714");
+        } catch (e) {
+          new import_obsidian.Notice(`\u62C9\u53D6\u5206\u533A\u5931\u8D25\uFF1A${e.message}`);
+        } finally {
+          btn.setDisabled(false);
+          btn.setButtonText("\u{1F504} \u62C9\u53D6\u5206\u533A");
+        }
+      })
+    );
+  }
+  // ---- RSS 源管理（服务端 DB 持久化） ----
+  renderSourcesSection(containerEl) {
+    const zoneLabel = this.plugin.settings.knownZones[this.plugin.activeZone()] || this.plugin.activeZone();
+    containerEl.createEl("h3", { text: `RSS \u6E90\uFF08\u5206\u533A\uFF1A${zoneLabel}\uFF09` });
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text: "\u589E\u5220\u7684\u662F\u300C\u5F53\u524D\u5206\u533A\u300D\u7684 RSS \u6E90\uFF1B\u6BCF\u4E2A\u5206\u533A\u72EC\u7ACB\u7EF4\u62A4\u81EA\u5DF1\u7684\u6E90\u5217\u8868\u3002\u6539\u52A8\u540E\u8FD0\u884C\u300C\u7ACB\u5373\u91C7\u96C6\u5E76\u5237\u65B0\u300D\u62C9\u53D6\u65B0\u6E90\u3002"
     });
     const bar = containerEl.createDiv({ cls: "fluxiars-source-bar" });
     bar.createEl("button", { text: "\u{1F504} \u5237\u65B0\u5217\u8868", cls: "fluxiars-source-refresh" }).addEventListener("click", () => this.refreshSources(listEl));
@@ -512,7 +614,7 @@ var FluxiaSettingTab = class extends import_obsidian.PluginSettingTab {
       addBtn.disabled = true;
       addBtn.setText("\u6DFB\u52A0\u4E2D\u2026");
       try {
-        const res = await this.plugin.api("/api/v1/sources", {
+        const res = await this.plugin.api(this.plugin.zonePath("/sources"), {
           method: "POST",
           body: { url, name: nameInput.value.trim() || void 0 }
         });
@@ -532,13 +634,13 @@ var FluxiaSettingTab = class extends import_obsidian.PluginSettingTab {
     });
     void this.refreshSources(listEl);
   }
-  /** 拉取 /api/v1/sources 并渲染列表；失败时在列表位显示错误而非抛错。 */
+  /** 拉取当前分区的源列表并渲染；失败时在列表位显示错误而非抛错。 */
   async refreshSources(listEl) {
     var _a;
     listEl.empty();
     listEl.createEl("p", { cls: "fluxiars-source-muted", text: "\u52A0\u8F7D\u4E2D\u2026" });
     try {
-      const res = await this.plugin.api("/api/v1/sources");
+      const res = await this.plugin.api(this.plugin.zonePath("/sources"));
       if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
       const sources = (_a = res.json) != null ? _a : [];
       listEl.empty();
@@ -561,7 +663,7 @@ var FluxiaSettingTab = class extends import_obsidian.PluginSettingTab {
           del.setText("\u2026");
           try {
             const r = await this.plugin.api(
-              `/api/v1/sources?url=${encodeURIComponent(s.url)}`,
+              `${this.plugin.zonePath("/sources")}?url=${encodeURIComponent(s.url)}`,
               { method: "DELETE" }
             );
             if (r.status !== 200) throw new Error(`HTTP ${r.status}`);

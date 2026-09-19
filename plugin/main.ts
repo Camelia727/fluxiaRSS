@@ -29,10 +29,14 @@ interface FluxiaSettings {
   apiToken: string;
   /** 每日笔记目录（vault 内相对路径） */
   digestDir: string;
-  /** 每日筛选 Top-K 的 K 值（digest 篇数） */
+  /** 每日筛选 Top-K 的 K 值（digest 篇数）；服务端分区配置优先 */
   digestSize: number;
   /** 过了该小时且今日笔记不存在时自动生成（0-23） */
   autoRefreshHour: number;
+  /** 当前分区 id（服务端 /api/v1/zones 的 id）；"default" 为默认区 */
+  activeZone: string;
+  /** 已知分区列表缓存（id -> 展示名），用于设置面板下拉与卡片徽标 */
+  knownZones: Record<string, string>;
 }
 
 interface RatedState {
@@ -64,6 +68,8 @@ interface DigestItem {
   reason: string;
   /** 来源（RSS 源名）；老数据可能缺失 */
   source?: string;
+  /** 文章所属分区 id（服务端返回；老数据可能缺失） */
+  zone?: string;
   /** 当前用户最近一次评分；未评过则缺省 */
   rated?: RatedInfo | null;
 }
@@ -71,7 +77,19 @@ interface DigestItem {
 interface Digest {
   date: string;
   generated?: string;
+  /** 该 digest 所属分区 id 与展示名（服务端返回） */
+  zone?: string;
+  zoneDisplay?: string;
   items: DigestItem[];
+}
+
+/** 服务端 /api/v1/zones 返回的一个分区 */
+interface ZoneInfo {
+  id: string;
+  display: string;
+  feed_count: number;
+  keyword_count: number;
+  created_at: string;
 }
 
 /** 服务端 /api/v1/sources 返回的一个 RSS 源 */
@@ -95,6 +113,8 @@ const DEFAULT_SETTINGS: FluxiaSettings = {
   digestDir: "FluxiaRSS",
   digestSize: 8,
   autoRefreshHour: 6,
+  activeZone: "default",
+  knownZones: {},
 };
 
 /** 非打分快捷动作：稍后读 / 跳过（打分改为自由输入 0-10） */
@@ -174,6 +194,11 @@ export default class FluxiaRSSPlugin extends Plugin {
 
     this.addSettingTab(new FluxiaSettingTab(this.app, this));
 
+    // 拉取一次分区列表（best-effort：服务端未起时静默，用缓存/默认值继续）
+    void this.refreshZones().catch(() => {
+      /* 离线或未配置好时忽略，设置面板里可手动重试 */
+    });
+
     // 每小时检查一次：过了 autoRefreshHour 且今日笔记不存在 → 自动生成
     this.registerInterval(
       window.setInterval(() => this.maybeAutoRefresh(), 60 * 60 * 1000)
@@ -220,8 +245,51 @@ export default class FluxiaRSSPlugin extends Plugin {
 
   // ---- 拉取与笔记 ----
 
+  /** 当前生效的分区 id（空则回退 default）。 */
+  activeZone(): string {
+    return this.settings.activeZone?.trim() || "default";
+  }
+
+  /** 分区 api 前缀：/api/v1/zones/{zone}/... */
+  zonePath(suffix: string): string {
+    const z = encodeURIComponent(this.activeZone());
+    return `/api/v1/zones/${z}${suffix}`;
+  }
+
+  /**
+   * 每日笔记路径。default 区沿用原来的 `{digestDir}/{date}.md`（不改老行为），
+   * 其他分区落到 `{digestDir}/{zone}/{date}.md`，避免不同分区互相覆盖。
+   */
   getTodayPath(): string {
-    return `${this.settings.digestDir}/${todayStr()}.md`;
+    const zone = this.activeZone();
+    const dir = zone === "default"
+      ? this.settings.digestDir
+      : `${this.settings.digestDir}/${zone}`;
+    return `${dir}/${todayStr()}.md`;
+  }
+
+  /** 笔记目录（按分区），用于创建目录。 */
+  getDigestDir(): string {
+    const zone = this.activeZone();
+    return zone === "default"
+      ? this.settings.digestDir
+      : `${this.settings.digestDir}/${zone}`;
+  }
+
+  /** 拉取服务端分区列表并缓存 id -> display。失败保持旧缓存，不阻塞主流程。 */
+  async refreshZones(): Promise<ZoneInfo[]> {
+    const res = await this.api("/api/v1/zones");
+    if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
+    const zones = ((res.json as ZoneInfo[]) ?? []);
+    const map: Record<string, string> = {};
+    for (const z of zones) map[z.id] = z.display || z.id;
+    this.settings.knownZones = map;
+    if (!map[this.activeZone()] && zones.length > 0) {
+      // 当前分区在服务端不存在（被删/改名）→ 回退 default 或第一个可用区
+      this.settings.activeZone = map["default"] ? "default" : zones[0].id;
+    }
+    await this.saveAll();
+    return zones;
   }
 
   async todayExists(): Promise<boolean> {
@@ -229,9 +297,17 @@ export default class FluxiaRSSPlugin extends Plugin {
   }
 
   async fetchDigest(): Promise<Digest> {
-    const res = await this.api(`/api/v1/digest?top=${this.settings.digestSize}`);
+    // 走分区端点：K 由服务端该分区的 digest_size 决定，插件的 digestSize 作为
+    // 顶层覆盖（?top=）保留手动微调能力。
+    const res = await this.api(
+      this.zonePath(`/digest?top=${this.settings.digestSize}`)
+    );
     if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
-    return res.json as Digest;
+    const digest = res.json as Digest;
+    digest.zone = this.activeZone();
+    digest.zoneDisplay =
+      this.settings.knownZones[this.activeZone()] || this.activeZone();
+    return digest;
   }
 
   /**
@@ -245,15 +321,17 @@ export default class FluxiaRSSPlugin extends Plugin {
     const digest = await this.fetchDigest();
     digest.generated = new Date().toISOString();
 
+    const zoneLabel = digest.zoneDisplay || this.activeZone();
     const content = [
       "---",
       `date: ${digest.date}`,
       `generated: ${digest.generated}`,
+      `zone: ${digest.zone ?? this.activeZone()}`,
       "---",
       "",
-      `# 📰 今日智读 · ${digest.date}`,
+      `# 📰 今日智读 · ${zoneLabel} · ${digest.date}`,
       "",
-      `> 生成于 ${new Date(digest.generated).toTimeString().slice(0, 5)} · 对文章打分/跳过，反馈进入长期记忆，影响明天排序。`,
+      `> 分区 ${zoneLabel} · 生成于 ${new Date(digest.generated).toTimeString().slice(0, 5)} · 对文章打分/跳过，反馈进入该分区的长期记忆，影响明天排序。`,
       "",
       "```fluxiars",
       JSON.stringify(digest),
@@ -261,7 +339,7 @@ export default class FluxiaRSSPlugin extends Plugin {
       "",
     ].join("\n");
 
-    await this.app.vault.createFolder(this.settings.digestDir).catch(() => {
+    await this.app.vault.createFolder(this.getDigestDir()).catch(() => {
       /* 目录已存在时忽略 */
     });
     await this.app.vault.adapter.write(path, content);
@@ -298,13 +376,17 @@ export default class FluxiaRSSPlugin extends Plugin {
 
   async collectAndRefresh(): Promise<void> {
     try {
-      const res = await this.api("/api/v1/collect", {
+      const res = await this.api(this.zonePath("/collect"), {
         method: "POST",
         body: {},
         timeout: 120000,
       });
-      const body = res.json as { fetched?: number; new_added?: number } | null;
-      new Notice(`采集完成：拉取 ${body?.fetched ?? "?"}，新增 ${body?.new_added ?? "?"}`);
+      const body = res.json as
+        | { zone?: string; fetched?: number; new_added?: number }
+        | null;
+      new Notice(
+        `[${body?.zone ?? this.activeZone()}] 采集完成：拉取 ${body?.fetched ?? "?"}，新增 ${body?.new_added ?? "?"}`
+      );
     } catch (e) {
       new Notice(`采集失败：${(e as Error).message}`);
     }
@@ -318,7 +400,7 @@ export default class FluxiaRSSPlugin extends Plugin {
     score: number | null,
     action: string
   ): Promise<void> {
-    const res = await this.api("/api/v1/rating", {
+    const res = await this.api(this.zonePath("/rating"), {
       method: "POST",
       body: { article_id: articleId, score, action },
     });
@@ -331,7 +413,7 @@ export default class FluxiaRSSPlugin extends Plugin {
 
   /** 给已评分文章补写评论（action=comment，服务端更新最近一条评分行的 comment）。 */
   async submitComment(articleId: string, comment: string): Promise<void> {
-    const res = await this.api("/api/v1/rating", {
+    const res = await this.api(this.zonePath("/rating"), {
       method: "POST",
       body: { article_id: articleId, comment, action: "comment" },
     });
@@ -374,8 +456,12 @@ class DigestRenderer {
     const gen = this.digest.generated
       ? new Date(this.digest.generated).toTimeString().slice(0, 5)
       : "—";
+    const zoneId = this.digest.zone ?? this.plugin.activeZone();
+    const zoneLabel =
+      this.digest.zoneDisplay ?? this.plugin.settings.knownZones[zoneId] ?? zoneId;
+    header.createEl("span", { cls: "fluxiars-zone-badge", text: `分区 · ${zoneLabel}` });
     header.createEl("span", {
-      text: `📰 ${this.digest.date} · ${this.digest.items.length} 篇 · 生成 ${gen}`,
+      text: ` · 📰 ${this.digest.date} · ${this.digest.items.length} 篇 · 生成 ${gen}`,
     });
 
     // 显示刷新：重拉当日状态（rank/评分/评论），跨端手动同步入口
@@ -613,6 +699,8 @@ class FluxiaSettingTab extends PluginSettingTab {
         t.inputEl.placeholder = "FLUXIARSS_API_TOKEN 的值";
       });
 
+    this.renderZoneSection(containerEl);
+
     new Setting(containerEl)
       .setName("digest 目录")
       .setDesc("每日笔记存放目录（vault 内相对路径）")
@@ -656,13 +744,71 @@ class FluxiaSettingTab extends PluginSettingTab {
     this.renderSourcesSection(containerEl);
   }
 
+  // ---- 分区（服务端 /api/v1/zones） ----
+
+  /**
+   * 分区选择器：下拉列出服务端所有分区，「刷新分区列表」重新拉取。
+   * 切换分区后，本次会话的 digest 路径、评分、源管理都会指向新分区。
+   */
+  private renderZoneSection(containerEl: HTMLElement): void {
+    containerEl.createEl("h3", { text: "分区" });
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text: "每个分区有独立的 RSS 源、每日篇数与长期记忆（Honcho 画像）。切换分区后，笔记目录与打分都会指向该分区。",
+    });
+
+    const setting = new Setting(containerEl)
+      .setName("当前分区")
+      .setDesc("选择要阅读的分区；服务端未启动时先用「刷新分区列表」拉取。");
+
+    setting.addDropdown((dd) => {
+      const zones = this.plugin.settings.knownZones;
+      const ids = Object.keys(zones);
+      if (ids.length === 0) {
+        dd.addOption(this.plugin.activeZone(), this.plugin.activeZone());
+      } else {
+        for (const id of ids) dd.addOption(id, `${zones[id]}（${id}）`);
+      }
+      dd.setValue(this.plugin.activeZone());
+      dd.onChange(async (v) => {
+        this.plugin.settings.activeZone = v;
+        await this.plugin.saveAll();
+        this.display(); // 重渲染：源列表标题/内容切到新分区
+        new Notice(`已切换到分区：${this.plugin.settings.knownZones[v] ?? v}`);
+      });
+    });
+
+    new Setting(containerEl)
+      .setName("刷新分区列表")
+      .setDesc("从服务端 /api/v1/zones 重新拉取分区，更新上面的下拉选项。")
+      .addButton((btn) =>
+        btn.setButtonText("🔄 拉取分区").onClick(async () => {
+          btn.setDisabled(true);
+          btn.setButtonText("拉取中…");
+          try {
+            await this.plugin.refreshZones();
+            this.display();
+            new Notice("分区列表已更新 ✔");
+          } catch (e) {
+            new Notice(`拉取分区失败：${(e as Error).message}`);
+          } finally {
+            btn.setDisabled(false);
+            btn.setButtonText("🔄 拉取分区");
+          }
+        })
+      );
+  }
+
   // ---- RSS 源管理（服务端 DB 持久化） ----
 
   private renderSourcesSection(containerEl: HTMLElement): void {
-    containerEl.createEl("h3", { text: "RSS 源" });
+    const zoneLabel =
+      this.plugin.settings.knownZones[this.plugin.activeZone()] ||
+      this.plugin.activeZone();
+    containerEl.createEl("h3", { text: `RSS 源（分区：${zoneLabel}）` });
     containerEl.createEl("p", {
       cls: "setting-item-description",
-      text: "增删自定义 RSS 源（内置源也列于此）。改动后运行「立即采集并刷新」拉取新源。",
+      text: "增删的是「当前分区」的 RSS 源；每个分区独立维护自己的源列表。改动后运行「立即采集并刷新」拉取新源。",
     });
 
     const bar = containerEl.createDiv({ cls: "fluxiars-source-bar" });
@@ -699,7 +845,7 @@ class FluxiaSettingTab extends PluginSettingTab {
       addBtn.disabled = true;
       addBtn.setText("添加中…");
       try {
-        const res = await this.plugin.api("/api/v1/sources", {
+        const res = await this.plugin.api(this.plugin.zonePath("/sources"), {
           method: "POST",
           body: { url, name: nameInput.value.trim() || undefined },
         });
@@ -721,12 +867,12 @@ class FluxiaSettingTab extends PluginSettingTab {
     void this.refreshSources(listEl);
   }
 
-  /** 拉取 /api/v1/sources 并渲染列表；失败时在列表位显示错误而非抛错。 */
+  /** 拉取当前分区的源列表并渲染；失败时在列表位显示错误而非抛错。 */
   private async refreshSources(listEl: HTMLElement): Promise<void> {
     listEl.empty();
     listEl.createEl("p", { cls: "fluxiars-source-muted", text: "加载中…" });
     try {
-      const res = await this.plugin.api("/api/v1/sources");
+      const res = await this.plugin.api(this.plugin.zonePath("/sources"));
       if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
       const sources = ((res.json as SourceInfo[]) ?? []);
       listEl.empty();
@@ -751,7 +897,7 @@ class FluxiaSettingTab extends PluginSettingTab {
           del.setText("…");
           try {
             const r = await this.plugin.api(
-              `/api/v1/sources?url=${encodeURIComponent(s.url)}`,
+              `${this.plugin.zonePath("/sources")}?url=${encodeURIComponent(s.url)}`,
               { method: "DELETE" }
             );
             if (r.status !== 200) throw new Error(`HTTP ${r.status}`);
