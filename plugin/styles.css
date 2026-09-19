@@ -224,3 +224,12 @@
   color: var(--text-muted);
   margin: 4px 0;
 }
+
+/* ---- 设置页：分区目录 ---- */
+.fluxiars-zonedir-section {
+  margin-top: 12px;
+}
+
+.fluxiars-zonedir-section h4 {
+  margin: 8px 0 2px;
+}

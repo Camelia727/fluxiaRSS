@@ -31,7 +31,8 @@ var DEFAULT_SETTINGS = {
   digestSize: 8,
   autoRefreshHour: 6,
   activeZone: "default",
-  knownZones: {}
+  knownZones: {},
+  zoneDirs: {}
 };
 var RATED_ACTIONS = [
   { score: null, action: "later", label: "\u{1F552} \u7A0D\u540E\u8BFB" },
@@ -49,6 +50,9 @@ function fetchWithTimeout(opts, timeoutMs) {
     );
   });
   return Promise.race([main, to]).finally(() => window.clearTimeout(timer));
+}
+function normalizeDir(p) {
+  return (p || "").trim().replace(/^\/+/, "").replace(/\/+$/, "").replace(/\/{2,}/g, "/");
 }
 function todayStr() {
   const d = /* @__PURE__ */ new Date();
@@ -113,6 +117,12 @@ var FluxiaRSSPlugin = class extends import_obsidian.Plugin {
     var _a, _b;
     const data = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, (_a = data == null ? void 0 : data.settings) != null ? _a : {});
+    if (!this.settings.knownZones || typeof this.settings.knownZones !== "object") {
+      this.settings.knownZones = {};
+    }
+    if (!this.settings.zoneDirs || typeof this.settings.zoneDirs !== "object") {
+      this.settings.zoneDirs = {};
+    }
     this.ratings = (_b = data == null ? void 0 : data.ratings) != null ? _b : {};
   }
   async saveAll() {
@@ -144,18 +154,27 @@ var FluxiaRSSPlugin = class extends import_obsidian.Plugin {
     return `/api/v1/zones/${z}${suffix}`;
   }
   /**
-   * 每日笔记路径。default 区沿用原来的 `{digestDir}/{date}.md`（不改老行为），
-   * 其他分区落到 `{digestDir}/{zone}/{date}.md`，避免不同分区互相覆盖。
+   * 指定分区的「回退目录」：未在 zoneDirs 里显式配置时用这个。
+   * default 区沿用原来的 `{digestDir}`（不改老行为），其他分区落入
+   * `{digestDir}/{zone}`，避免不同分区互相覆盖。
    */
-  getTodayPath() {
-    const zone = this.activeZone();
-    const dir = zone === "default" ? this.settings.digestDir : `${this.settings.digestDir}/${zone}`;
-    return `${dir}/${todayStr()}.md`;
+  defaultZoneDir(zone) {
+    const base = normalizeDir(this.settings.digestDir) || DEFAULT_SETTINGS.digestDir;
+    return zone === "default" ? base : `${base}/${zone}`;
   }
-  /** 笔记目录（按分区），用于创建目录。 */
+  /** 指定分区实际生效的笔记目录：显式配置优先，否则用回退值。 */
+  zoneDir(zone) {
+    var _a, _b;
+    const explicit = normalizeDir((_b = (_a = this.settings.zoneDirs) == null ? void 0 : _a[zone]) != null ? _b : "");
+    return explicit || this.defaultZoneDir(zone);
+  }
+  /** 当前分区生效的笔记目录。 */
   getDigestDir() {
-    const zone = this.activeZone();
-    return zone === "default" ? this.settings.digestDir : `${this.settings.digestDir}/${zone}`;
+    return this.zoneDir(this.activeZone());
+  }
+  /** 当前分区今日笔记的 vault 内路径。 */
+  getTodayPath() {
+    return `${this.getDigestDir()}/${todayStr()}.md`;
   }
   /** 拉取服务端分区列表并缓存 id -> display。失败保持旧缓存，不阻塞主流程。 */
   async refreshZones() {
@@ -510,7 +529,7 @@ var FluxiaSettingTab = class extends import_obsidian.PluginSettingTab {
       t.inputEl.placeholder = "FLUXIARSS_API_TOKEN \u7684\u503C";
     });
     this.renderZoneSection(containerEl);
-    new import_obsidian.Setting(containerEl).setName("digest \u76EE\u5F55").setDesc("\u6BCF\u65E5\u7B14\u8BB0\u5B58\u653E\u76EE\u5F55\uFF08vault \u5185\u76F8\u5BF9\u8DEF\u5F84\uFF09").addText(
+    new import_obsidian.Setting(containerEl).setName("\u9ED8\u8BA4\u76EE\u5F55\uFF08digestDir\uFF09").setDesc("\u672A\u5355\u72EC\u6307\u5B9A\u76EE\u5F55\u7684\u5206\u533A\u7528\u5B83\u4F5C\u4E3A\u57FA\u51C6\uFF08vault \u5185\u76F8\u5BF9\u8DEF\u5F84\uFF09\u3002default \u533A\u76F4\u63A5\u7528\u8FD9\u4E2A\u503C\uFF0C\u5176\u4ED6\u5206\u533A\u9ED8\u8BA4\u5728\u5176\u4E0B\u5EFA\u540C\u540D\u5B50\u76EE\u5F55\u3002").addText(
       (t) => t.setValue(this.plugin.settings.digestDir).onChange(async (v) => {
         this.plugin.settings.digestDir = v.trim() || DEFAULT_SETTINGS.digestDir;
         await this.plugin.saveAll();
@@ -559,7 +578,7 @@ var FluxiaSettingTab = class extends import_obsidian.PluginSettingTab {
         new import_obsidian.Notice(`\u5DF2\u5207\u6362\u5230\u5206\u533A\uFF1A${(_a = this.plugin.settings.knownZones[v]) != null ? _a : v}`);
       });
     });
-    new import_obsidian.Setting(containerEl).setName("\u5237\u65B0\u5206\u533A\u5217\u8868").setDesc("\u4ECE\u670D\u52A1\u7AEF /api/v1/zones \u91CD\u65B0\u62C9\u53D6\u5206\u533A\uFF0C\u66F4\u65B0\u4E0A\u9762\u7684\u4E0B\u62C9\u9009\u9879\u3002").addButton(
+    new import_obsidian.Setting(containerEl).setName("\u5237\u65B0\u5206\u533A\u5217\u8868").setDesc("\u4ECE\u670D\u52A1\u7AEF /api/v1/zones \u91CD\u65B0\u62C9\u53D6\u5206\u533A\uFF0C\u66F4\u65B0\u4E0A\u9762\u7684\u4E0B\u62C9\u9009\u9879\u4E0E\u4E0B\u65B9\u76EE\u5F55\u8868\u3002").addButton(
       (btn) => btn.setButtonText("\u{1F504} \u62C9\u53D6\u5206\u533A").onClick(async () => {
         btn.setDisabled(true);
         btn.setButtonText("\u62C9\u53D6\u4E2D\u2026");
@@ -575,6 +594,60 @@ var FluxiaSettingTab = class extends import_obsidian.PluginSettingTab {
         }
       })
     );
+    this.renderZoneDirs(containerEl);
+  }
+  // ---- 分区目录（每区可独立指定，留空则用回退值） ----
+  /**
+   * 分区目录表：每个已知分区一行，输入框显示「当前生效目录」。
+   * 显示的是回退值（default 区 = digestDir，其他 = digestDir/zone）时视为未显式
+   * 配置；一旦修改就写入 zoneDirs 作为显式覆盖。点「恢复默认」清掉显式值。
+   */
+  renderZoneDirs(containerEl) {
+    var _a, _b;
+    const zones = this.plugin.settings.knownZones;
+    const ids = Object.keys(zones);
+    const wrap = containerEl.createDiv({ cls: "fluxiars-zonedir-section" });
+    wrap.createEl("h4", { text: "\u5206\u533A\u7B14\u8BB0\u76EE\u5F55" });
+    wrap.createEl("p", {
+      cls: "setting-item-description",
+      text: "\u6BCF\u4E2A\u5206\u533A\u7684\u6BCF\u65E5\u7B14\u8BB0\u5B58\u653E\u76EE\u5F55\uFF08vault \u5185\u76F8\u5BF9\u8DEF\u5F84\uFF09\u3002\u6846\u5185\u4E3A\u5F53\u524D\u751F\u6548\u503C\uFF1A\u4FEE\u6539\u540E\u6210\u4E3A\u8BE5\u5206\u533A\u7684\u81EA\u5B9A\u4E49\u76EE\u5F55\uFF1B\u7559\u7A7A\u6216\u70B9\u300C\u6062\u590D\u9ED8\u8BA4\u300D\u5219\u56DE\u5230\u9ED8\u8BA4\u89C4\u5219\uFF08default \u533A\u7528\u4E0A\u9762\u7684 digestDir\uFF0C\u5176\u4ED6\u5206\u533A\u7528 digestDir/\u5206\u533A id\uFF09\u3002"
+    });
+    if (ids.length === 0) {
+      wrap.createEl("p", {
+        cls: "fluxiars-source-muted",
+        text: "\uFF08\u5C1A\u672A\u62C9\u53D6\u5230\u5206\u533A\u5217\u8868\uFF0C\u8BF7\u5148\u70B9\u4E0A\u9762\u7684\u300C\u{1F504} \u62C9\u53D6\u5206\u533A\u300D\uFF09"
+      });
+      return;
+    }
+    for (const id of ids) {
+      const label = zones[id] || id;
+      const explicit = normalizeDir((_b = (_a = this.plugin.settings.zoneDirs) == null ? void 0 : _a[id]) != null ? _b : "");
+      const effective = this.plugin.zoneDir(id);
+      const s = new import_obsidian.Setting(wrap).setName(`${label}\uFF08${id}\uFF09`).setDesc(explicit ? "\u81EA\u5B9A\u4E49\u76EE\u5F55" : `\u9ED8\u8BA4\u89C4\u5219\uFF1A${this.plugin.defaultZoneDir(id)}`);
+      s.addText((txt) => {
+        txt.setValue(effective).onChange(async (v) => {
+          const v2 = normalizeDir(v);
+          if (!v2) {
+            delete this.plugin.settings.zoneDirs[id];
+          } else {
+            this.plugin.settings.zoneDirs[id] = v2;
+          }
+          await this.plugin.saveAll();
+          s.setDesc(v2 ? "\u81EA\u5B9A\u4E49\u76EE\u5F55" : `\u9ED8\u8BA4\u89C4\u5219\uFF1A${this.plugin.defaultZoneDir(id)}`);
+        });
+        txt.inputEl.addEventListener("blur", () => {
+          txt.setValue(this.plugin.zoneDir(id));
+        });
+      });
+      s.addExtraButton(
+        (btn) => btn.setIcon("rotate-ccw").setTooltip("\u6062\u590D\u9ED8\u8BA4\u76EE\u5F55").onClick(async () => {
+          delete this.plugin.settings.zoneDirs[id];
+          await this.plugin.saveAll();
+          this.display();
+          new import_obsidian.Notice(`\u5DF2\u6062\u590D\u9ED8\u8BA4\u76EE\u5F55\uFF1A${this.plugin.defaultZoneDir(id)}`);
+        })
+      );
+    }
   }
   // ---- RSS 源管理（服务端 DB 持久化） ----
   renderSourcesSection(containerEl) {

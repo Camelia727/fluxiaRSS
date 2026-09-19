@@ -1,9 +1,9 @@
 {
   "id": "fluxiars-digest",
   "name": "fluxiaRSS 今日智读",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minAppVersion": "1.0.0",
-  "description": "每天拉取 RSS 智读 digest 写成笔记，五档打分回传反哺排序与采集筛选",
+  "description": "每天拉取 RSS 智读 digest 写成笔记，0-10 打分回传反哺排序与采集筛选；支持多分区",
   "author": "fluxiaRSS",
   "isDesktopOnly": false
 }

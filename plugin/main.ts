@@ -37,6 +37,12 @@ interface FluxiaSettings {
   activeZone: string;
   /** 已知分区列表缓存（id -> 展示名），用于设置面板下拉与卡片徽标 */
   knownZones: Record<string, string>;
+  /**
+   * 分区 → 笔记目录的显式覆盖（vault 内相对路径）。
+   * 未配置的分区回退 defaultZoneDir()：default 用 digestDir，其他区用
+   * `${digestDir}/${zone}`。留空或删键即恢复回退值。
+   */
+  zoneDirs: Record<string, string>;
 }
 
 interface RatedState {
@@ -115,6 +121,7 @@ const DEFAULT_SETTINGS: FluxiaSettings = {
   autoRefreshHour: 6,
   activeZone: "default",
   knownZones: {},
+  zoneDirs: {},
 };
 
 /** 非打分快捷动作：稍后读 / 跳过（打分改为自由输入 0-10） */
@@ -140,6 +147,15 @@ function fetchWithTimeout(
     );
   });
   return Promise.race([main, to]).finally(() => window.clearTimeout(timer));
+}
+
+/** 目录归一化：去首尾斜杠、折叠重复斜杠，便于比较与拼接 vault 路径。 */
+function normalizeDir(p: string): string {
+  return (p || "")
+    .trim()
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "")
+    .replace(/\/{2,}/g, "/");
 }
 
 function todayStr(): string {
@@ -217,6 +233,14 @@ export default class FluxiaRSSPlugin extends Plugin {
   async loadSettings(): Promise<void> {
     const data = (await this.loadData()) as Partial<PluginData> | null;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data?.settings ?? {});
+    // 老 data.json 没有这些键，Object.assign 只在键缺失时兜底；这里再防一手
+    // 显式写坏（null/非对象），避免设置面板读 .zoneDirs[id] 时抛错。
+    if (!this.settings.knownZones || typeof this.settings.knownZones !== "object") {
+      this.settings.knownZones = {};
+    }
+    if (!this.settings.zoneDirs || typeof this.settings.zoneDirs !== "object") {
+      this.settings.zoneDirs = {};
+    }
     this.ratings = data?.ratings ?? {};
   }
 
@@ -257,23 +281,29 @@ export default class FluxiaRSSPlugin extends Plugin {
   }
 
   /**
-   * 每日笔记路径。default 区沿用原来的 `{digestDir}/{date}.md`（不改老行为），
-   * 其他分区落到 `{digestDir}/{zone}/{date}.md`，避免不同分区互相覆盖。
+   * 指定分区的「回退目录」：未在 zoneDirs 里显式配置时用这个。
+   * default 区沿用原来的 `{digestDir}`（不改老行为），其他分区落入
+   * `{digestDir}/{zone}`，避免不同分区互相覆盖。
    */
-  getTodayPath(): string {
-    const zone = this.activeZone();
-    const dir = zone === "default"
-      ? this.settings.digestDir
-      : `${this.settings.digestDir}/${zone}`;
-    return `${dir}/${todayStr()}.md`;
+  defaultZoneDir(zone: string): string {
+    const base = normalizeDir(this.settings.digestDir) || DEFAULT_SETTINGS.digestDir;
+    return zone === "default" ? base : `${base}/${zone}`;
   }
 
-  /** 笔记目录（按分区），用于创建目录。 */
+  /** 指定分区实际生效的笔记目录：显式配置优先，否则用回退值。 */
+  zoneDir(zone: string): string {
+    const explicit = normalizeDir(this.settings.zoneDirs?.[zone] ?? "");
+    return explicit || this.defaultZoneDir(zone);
+  }
+
+  /** 当前分区生效的笔记目录。 */
   getDigestDir(): string {
-    const zone = this.activeZone();
-    return zone === "default"
-      ? this.settings.digestDir
-      : `${this.settings.digestDir}/${zone}`;
+    return this.zoneDir(this.activeZone());
+  }
+
+  /** 当前分区今日笔记的 vault 内路径。 */
+  getTodayPath(): string {
+    return `${this.getDigestDir()}/${todayStr()}.md`;
   }
 
   /** 拉取服务端分区列表并缓存 id -> display。失败保持旧缓存，不阻塞主流程。 */
@@ -702,8 +732,9 @@ class FluxiaSettingTab extends PluginSettingTab {
     this.renderZoneSection(containerEl);
 
     new Setting(containerEl)
-      .setName("digest 目录")
-      .setDesc("每日笔记存放目录（vault 内相对路径）")
+      .setName("默认目录（digestDir）")
+      .setDesc("未单独指定目录的分区用它作为基准（vault 内相对路径）。"
+        + "default 区直接用这个值，其他分区默认在其下建同名子目录。")
       .addText((t) =>
         t
           .setValue(this.plugin.settings.digestDir)
@@ -780,7 +811,7 @@ class FluxiaSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("刷新分区列表")
-      .setDesc("从服务端 /api/v1/zones 重新拉取分区，更新上面的下拉选项。")
+      .setDesc("从服务端 /api/v1/zones 重新拉取分区，更新上面的下拉选项与下方目录表。")
       .addButton((btn) =>
         btn.setButtonText("🔄 拉取分区").onClick(async () => {
           btn.setDisabled(true);
@@ -797,6 +828,81 @@ class FluxiaSettingTab extends PluginSettingTab {
           }
         })
       );
+
+    this.renderZoneDirs(containerEl);
+  }
+
+  // ---- 分区目录（每区可独立指定，留空则用回退值） ----
+
+  /**
+   * 分区目录表：每个已知分区一行，输入框显示「当前生效目录」。
+   * 显示的是回退值（default 区 = digestDir，其他 = digestDir/zone）时视为未显式
+   * 配置；一旦修改就写入 zoneDirs 作为显式覆盖。点「恢复默认」清掉显式值。
+   */
+  private renderZoneDirs(containerEl: HTMLElement): void {
+    const zones = this.plugin.settings.knownZones;
+    const ids = Object.keys(zones);
+
+    const wrap = containerEl.createDiv({ cls: "fluxiars-zonedir-section" });
+    wrap.createEl("h4", { text: "分区笔记目录" });
+    wrap.createEl("p", {
+      cls: "setting-item-description",
+      text: "每个分区的每日笔记存放目录（vault 内相对路径）。框内为当前生效值："
+        + "修改后成为该分区的自定义目录；留空或点「恢复默认」则回到默认规则"
+        + "（default 区用上面的 digestDir，其他分区用 digestDir/分区 id）。",
+    });
+
+    if (ids.length === 0) {
+      wrap.createEl("p", {
+        cls: "fluxiars-source-muted",
+        text: "（尚未拉取到分区列表，请先点上面的「🔄 拉取分区」）",
+      });
+      return;
+    }
+
+    for (const id of ids) {
+      const label = zones[id] || id;
+      const explicit = normalizeDir(this.plugin.settings.zoneDirs?.[id] ?? "");
+      const effective = this.plugin.zoneDir(id); // 显式或回退
+
+      const s = new Setting(wrap)
+        .setName(`${label}（${id}）`)
+        .setDesc(explicit ? "自定义目录" : `默认规则：${this.plugin.defaultZoneDir(id)}`);
+
+      s.addText((txt) => {
+        txt.setValue(effective).onChange(async (v) => {
+          const v2 = normalizeDir(v);
+          if (!v2) {
+            // 清空 = 恢复回退
+            delete this.plugin.settings.zoneDirs[id];
+          } else {
+            this.plugin.settings.zoneDirs[id] = v2;
+          }
+          await this.plugin.saveAll();
+          // 只更新本行描述，避免整面板重渲染打断输入
+          s.setDesc(v2
+            ? "自定义目录"
+            : `默认规则：${this.plugin.defaultZoneDir(id)}`);
+        });
+        txt.inputEl.addEventListener("blur", () => {
+          // 失焦时把显示值规范成「生效值」，避免空格/多余斜杠造成误解。
+          // onChange 已负责落盘，这里只做显示层归一化，不再重复写。
+          txt.setValue(this.plugin.zoneDir(id));
+        });
+      });
+
+      s.addExtraButton((btn) =>
+        btn
+          .setIcon("rotate-ccw")
+          .setTooltip("恢复默认目录")
+          .onClick(async () => {
+            delete this.plugin.settings.zoneDirs[id];
+            await this.plugin.saveAll();
+            this.display();
+            new Notice(`已恢复默认目录：${this.plugin.defaultZoneDir(id)}`);
+          })
+      );
+    }
   }
 
   // ---- RSS 源管理（服务端 DB 持久化） ----
